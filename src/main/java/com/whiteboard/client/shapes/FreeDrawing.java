@@ -21,7 +21,7 @@ public class FreeDrawing extends Shape {
 
     @Override
     public void draw(Graphics2D g) {
-        g.setColor(color);
+        g.setColor(getDrawColor());
         g.setStroke(new BasicStroke(strokeWidth, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
 
         for (int i = 0; i < points.size() - 1; i++) {

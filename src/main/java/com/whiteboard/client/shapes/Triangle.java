@@ -9,7 +9,7 @@ public class Triangle extends Shape {
 
     @Override
     public void draw(Graphics2D g) {
-        g.setColor(color);
+        g.setColor(getDrawColor());
         g.setStroke(new BasicStroke(strokeWidth));
 
         // 计算三角形的三个点

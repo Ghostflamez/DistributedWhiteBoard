@@ -9,7 +9,7 @@ public class Line extends Shape {
 
     @Override
     public void draw(Graphics2D g) {
-        g.setColor(color);
+        g.setColor(getDrawColor());
         g.setStroke(new BasicStroke(strokeWidth));
         g.drawLine(startPoint.x, startPoint.y, endPoint.x, endPoint.y);
     }

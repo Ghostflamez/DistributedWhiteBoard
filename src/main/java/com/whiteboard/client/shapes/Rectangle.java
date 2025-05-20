@@ -9,7 +9,7 @@ public class Rectangle extends Shape {
 
     @Override
     public void draw(Graphics2D g) {
-        g.setColor(color);
+        g.setColor(getDrawColor());
         g.setStroke(new BasicStroke(strokeWidth));
 
         int x = Math.min(startPoint.x, endPoint.x);

@@ -14,7 +14,7 @@ public class Text extends Shape {
 
     @Override
     public void draw(Graphics2D g) {
-        g.setColor(color);
+        g.setColor(getDrawColor());
         g.setFont(font);
         g.drawString(text, startPoint.x, startPoint.y);
     }

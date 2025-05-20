@@ -1,6 +1,9 @@
 package com.whiteboard.client.ui;
 
 import com.whiteboard.client.shapes.Shape;
+//test
+import com.whiteboard.client.shapes.Rectangle;
+//test
 import com.whiteboard.client.tools.*;
 
 import javax.swing.*;
@@ -238,4 +241,5 @@ public class WhiteboardPanel extends JPanel {
         this.shapes = new ArrayList<>(shapes);
         repaint();
     }
+
 }
