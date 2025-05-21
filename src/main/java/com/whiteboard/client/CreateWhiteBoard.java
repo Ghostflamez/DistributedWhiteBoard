@@ -3,11 +3,12 @@ package com.whiteboard.client;
 import javax.swing.*;
 import java.rmi.RemoteException;
 
+// CreateWhiteBoard.java
 public class CreateWhiteBoard {
     public static void main(String[] args) {
         if (args.length < 3) {
             System.err.println("Usage: java CreateWhiteBoard <serverIPAddress> <serverPort> <username>");
-            return; // 不提供默认值，而是退出
+            return;
         }
 
         String serverIP = args[0];
@@ -23,7 +24,8 @@ public class CreateWhiteBoard {
         System.out.println("Connecting to server at " + serverIP + ":" + serverPort + " as " + username);
 
         try {
-            WhiteboardClient client = new WhiteboardClient(username, serverIP, serverPort);
+            // 请求作为管理员连接
+            WhiteboardClient client = new WhiteboardClient(username, serverIP, serverPort, true);
         } catch (RemoteException e) {
             System.err.println("Error connecting to server: " + e.getMessage());
             e.printStackTrace();
@@ -48,3 +50,4 @@ public class CreateWhiteBoard {
         }
     }
 }
+

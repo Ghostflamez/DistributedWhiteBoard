@@ -35,16 +35,17 @@ public class UserManager {
      * @param username 用户名
      * @return 会话ID，如果用户名冲突则返回null
      */
-    public synchronized String connectUser(String username) {
+    public synchronized String connectUser(String username, boolean requestAsManager) {
+        logger.info("Connecting user: " + username + ", request as manager: " + requestAsManager);
+
         // 生成唯一UID
         String uid = UUID.randomUUID().toString();
 
         // 生成唯一会话ID
         String sessionId = UUID.randomUUID().toString();
 
-        // 检查用户名是否已存在
+        // 处理用户名冲突
         if (usernameToUid.containsKey(username)) {
-            // 用户名冲突处理
             String originalUsername = username;
             int suffix = 1;
             while (usernameToUid.containsKey(username)) {
@@ -53,8 +54,8 @@ public class UserManager {
             logger.info("Username conflict resolved: " + originalUsername + " -> " + username);
         }
 
-        // 第一个连接的用户成为管理员
-        boolean isManager = (managerId == null);
+        // 确定用户角色
+        boolean isManager = requestAsManager && managerId == null;
 
         User user = new User(uid, username, isManager);
         user.setSessionId(sessionId);
@@ -68,9 +69,10 @@ public class UserManager {
             approvedUids.add(uid);  // 管理员自动批准
             logger.info("Manager connected: " + username + ", UID: " + uid);
         } else {
-            // 其他用户需要管理员批准
+            // 其他用户需要批准
             pendingUsers.put(sessionId, user);
             sessionToUid.put(sessionId, uid);
+            usernameToUid.put(username, uid);
             logger.info("User pending approval: " + username + ", UID: " + uid);
         }
 

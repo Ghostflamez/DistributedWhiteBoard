@@ -20,6 +20,7 @@ import java.util.Timer;
 import java.util.TimerTask;
 
 
+
 public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboardClient, Serializable {
     private static final Logger logger = Logger.getLogger(WhiteboardClient.class.getName());
 
@@ -70,19 +71,18 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
     }
 
     /**
-     * 连网模式构造函数
+     * 连网模式构造函数（请求作为管理员连接）
      */
-    public WhiteboardClient(String username, String serverAddress, int serverPort) throws RemoteException {
+
+    public WhiteboardClient(String username, String serverAddress, int serverPort, boolean requestAsManager) throws RemoteException {
         this.username = username;
 
         try {
             // 连接服务器
-            connectToServer(serverAddress, serverPort);
+            connectToServer(serverAddress, serverPort, requestAsManager);
 
             // 初始化UI
             initializeUI();
-
-            // 注意：注册回调会在UI初始化完成后通过事件处理
 
         } catch (Exception e) {
             logger.severe("Error initializing client: " + e.getMessage());
@@ -93,7 +93,7 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
     /**
      * 连接到服务器
      */
-    private void connectToServer(String serverAddress, int serverPort) {
+    private void connectToServer(String serverAddress, int serverPort, boolean requestAsManager) {
         try {
             // 获取RMI注册表
             Registry registry = LocateRegistry.getRegistry(serverAddress, serverPort);
@@ -102,9 +102,9 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
             server = (IWhiteboardServer) registry.lookup("WhiteboardServer");
 
             // 连接用户
-            sessionId = server.connectUser(username);
+            sessionId = server.connectUser(username, requestAsManager);
 
-            // 如果返回null，表示连接被拒绝（可能是第二管理员）
+            // 如果返回null，表示连接被拒绝
             if (sessionId == null) {
                 JOptionPane.showMessageDialog(null,
                         "Connection rejected: Another manager is already connected.",
@@ -115,7 +115,7 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
             }
 
             // 确定是否为管理员
-            isManager = sessionId != null && server.isManager(sessionId);
+            isManager = server.isManager(sessionId);
             isConnected = true;
 
             // 启动心跳
@@ -123,6 +123,14 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
 
             // 如果不是管理员，启动加入请求
             if (!isManager) {
+                // 显示等待审批对话框
+                SwingUtilities.invokeLater(() -> {
+                    JOptionPane.showMessageDialog(null,
+                            "Your join request has been sent. Waiting for manager approval...",
+                            "Join Request Sent",
+                            JOptionPane.INFORMATION_MESSAGE);
+                });
+
                 startJoinRequestTimer();
             } else {
                 isApproved = true; // 管理员自动批准
@@ -139,6 +147,7 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
         }
     }
 
+
     /**
      * 初始化UI
      */
@@ -149,7 +158,7 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
 
             // 设置白板面板的绘图事件监听器
             frame.getWhiteboardPanel().setDrawingListener(shape -> {
-                if (isConnected) {
+                if (isConnected && (isManager || isApproved)) {
                     try {
                         server.addShape(shape, sessionId);
                     } catch (RemoteException e) {
@@ -163,18 +172,23 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
             // 标记UI已初始化
             uiInitialized = true;
 
-            // 注册客户端回调
-            if (isConnected) {
+            // 如果是管理员或已批准，注册客户端回调
+            if (isConnected && (isManager || isApproved)) {
                 try {
                     server.registerClient(sessionId, this);
+                    logger.info("Registered client for updates");
 
-                    // 检索并显示当前的所有形状
+                    // 获取当前状态
                     List<Shape> shapes = server.getAllShapes();
                     for (Shape shape : shapes) {
                         frame.getWhiteboardPanel().addShape(shape);
                     }
+
+                    // 获取用户列表
+                    List<String> users = server.getConnectedUsers();
+                    frame.updateUserList(users);
                 } catch (RemoteException e) {
-                    logger.warning("Error registering client or getting shapes: " + e.getMessage());
+                    logger.warning("Error registering client or getting initial state: " + e.getMessage());
                 }
             }
 
@@ -328,7 +342,15 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
 
     @Override
     public void notifyManagerDecision(boolean approved) throws RemoteException {
-        this.isApproved = approved;
+        this.isApproved = approved; // 更新状态
+
+        logger.info("Received manager decision: " + (approved ? "Approved" : "Rejected"));
+
+        // 停止请求定时器
+        if (joinRequestTimer != null) {
+            joinRequestTimer.cancel();
+            joinRequestTimer = null;
+        }
 
         if (uiInitialized && frame != null) {
             SwingUtilities.invokeLater(() -> {
@@ -337,6 +359,16 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
                             "Your request to join has been approved",
                             "Request Approved",
                             JOptionPane.INFORMATION_MESSAGE);
+
+                    // 已批准，注册客户端回调以获取更新
+                    try {
+                        if (server != null) {
+                            server.registerClient(sessionId, this);
+                            logger.info("Registered client for updates after approval");
+                        }
+                    } catch (RemoteException e) {
+                        logger.warning("Error registering client after approval: " + e.getMessage());
+                    }
                 } else {
                     JOptionPane.showMessageDialog(frame,
                             "Your request to join has been rejected",
@@ -623,7 +655,7 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
      * 发送加入请求
      */
     private void sendJoinRequest() {
-        if (isConnected && server != null) {
+        if (isConnected && !isApproved && !isManager && server != null) {
             try {
                 // 发送加入请求
                 server.requestJoin(username, sessionId);
@@ -633,7 +665,6 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
                 handleConnectionError(e);
             }
         }
-
     }
 
     /**

@@ -6,8 +6,10 @@ import java.util.List;
 import com.whiteboard.client.shapes.Shape;
 
 public interface IWhiteboardServer extends Remote {
-    // 原有方法
-    String connectUser(String username) throws RemoteException;
+    // 修改连接方法
+    String connectUser(String username, boolean requestAsManager) throws RemoteException;
+
+    // 其他现有方法保持不变
     boolean approveUser(String username, String managerId) throws RemoteException;
     void disconnectUser(String sessionId) throws RemoteException;
     List<String> getConnectedUsers() throws RemoteException;

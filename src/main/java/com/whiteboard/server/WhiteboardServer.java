@@ -47,18 +47,18 @@ public class WhiteboardServer implements IWhiteboardServer {
     }
 
     // 用户管理方法实现
-@Override
-public String connectUser(String username) throws RemoteException {
-    logger.info("User connecting: " + username);
+    @Override
+    public String connectUser(String username, boolean requestAsManager) throws RemoteException {
+        logger.info("User connecting: " + username + ", request as manager: " + requestAsManager);
 
-    // 如果已有管理员且尝试作为管理员登录，则拒绝
-    if (userManager.getManagerId() != null && userManager.getConnectedUsernames().isEmpty()) {
-        logger.warning("Second manager attempted to connect: " + username);
-        return null; // 拒绝连接
+        // 如果请求作为管理员但已有管理员
+        if (requestAsManager && userManager.getManagerId() != null) {
+            logger.warning("Second manager attempted to connect: " + username);
+            return null; // 拒绝连接
+        }
+
+        return userManager.connectUser(username, requestAsManager);
     }
-
-    return userManager.connectUser(username);
-}
 
     @Override
     public boolean approveUser(String username, String managerId) throws RemoteException {
@@ -66,10 +66,27 @@ public String connectUser(String username) throws RemoteException {
         if (userManager.isManager(managerId)) {
             boolean approved = userManager.approveUser(username, managerId);
             if (approved) {
-                notifyUserApproved(username);
-                broadcastUserList();
+                // 获取用户会话ID
+                User user = userManager.getUserByUsername(username);
+                if (user != null) {
+                    String userSessionId = user.getSessionId();
+
+                    // 通知用户已批准
+                    IWhiteboardClient client = clientCallbacks.get(userSessionId);
+                    if (client != null) {
+                        try {
+                            client.notifyManagerDecision(true);
+                            logger.info("Notified user " + username + " of approval");
+                        } catch (RemoteException e) {
+                            logger.warning("Error notifying user of approval: " + e.getMessage());
+                        }
+                    }
+
+                    // 广播更新的用户列表
+                    broadcastUserList();
+                }
+                return true;
             }
-            return approved;
         }
         return false;
     }
@@ -202,10 +219,32 @@ public String connectUser(String username) throws RemoteException {
     @Override
     public void registerClient(String sessionId, IWhiteboardClient client) throws RemoteException {
         logger.info("Registering client callback for session: " + sessionId);
-        if (userManager.isConnectedUser(sessionId)) {
+        try {
+            // 验证会话ID
+            if (sessionId == null) {
+                logger.warning("Attempt to register client with null session ID");
+                return;
+            }
+
+            // 检查用户权限
+            if (!userManager.isConnectedUser(sessionId) && !userManager.isManager(sessionId)) {
+                logger.warning("Attempt to register unauthorized client: " + sessionId);
+                return;
+            }
+
+            // 注册回调
             clientCallbacks.put(sessionId, client);
+
+            // 发送初始状态
             sendInitialState(sessionId);
+
+            // 广播用户列表
             broadcastUserList();
+
+            logger.info("Client registered successfully: " + sessionId);
+        } catch (Exception e) {
+            logger.severe("Error registering client: " + e.getMessage());
+            throw new RemoteException("Failed to register client", e);
         }
     }
 
