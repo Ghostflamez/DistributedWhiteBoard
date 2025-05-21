@@ -1,0 +1,5274 @@
+
+
+===== .\src\main\java\com\whiteboard\client\CreateWhiteBoard.java =====
+package com.whiteboard.client;
+
+import javax.swing.*;
+import java.rmi.RemoteException;
+
+public class CreateWhiteBoard {
+    public static void main(String[] args) {
+        if (args.length < 3) {
+            System.err.println("Usage: java CreateWhiteBoard <serverIPAddress> <serverPort> <username>");
+            return; // 不提供默认值，而是退出
+        }
+
+        String serverIP = args[0];
+        int serverPort;
+        try {
+            serverPort = Integer.parseInt(args[1]);
+        } catch (NumberFormatException e) {
+            System.err.println("Invalid port number: " + args[1]);
+            return;
+        }
+        String username = args[2];
+
+        System.out.println("Connecting to server at " + serverIP + ":" + serverPort + " as " + username);
+
+        try {
+            WhiteboardClient client = new WhiteboardClient(username, serverIP, serverPort);
+        } catch (RemoteException e) {
+            System.err.println("Error connecting to server: " + e.getMessage());
+            e.printStackTrace();
+
+            // 提示用户是否要在本地模式运行
+            int response = JOptionPane.showConfirmDialog(
+                    null,
+                    "Failed to connect to server. Would you like to run in local mode?",
+                    "Connection Error",
+                    JOptionPane.YES_NO_OPTION,
+                    JOptionPane.QUESTION_MESSAGE
+            );
+
+            if (response == JOptionPane.YES_OPTION) {
+                try {
+                    WhiteboardClient localClient = new WhiteboardClient(username, true);
+                } catch (RemoteException ex) {
+                    System.err.println("Error creating local client: " + ex.getMessage());
+                    ex.printStackTrace();
+                }
+            }
+        }
+    }
+}
+
+===== .\src\main\java\com\whiteboard\client\JoinWhiteBoard.java =====
+package com.whiteboard.client;
+
+import javax.swing.*;
+import java.rmi.RemoteException;
+
+public class JoinWhiteBoard {
+    public static void main(String[] args) {
+        if (args.length < 3) {
+            System.err.println("Usage: java JoinWhiteBoard <serverIPAddress> <serverPort> <username>");
+            System.out.println("Running in local mode as guest");
+
+            try {
+                WhiteboardClient client = new WhiteboardClient("Guest", false);
+            } catch (RemoteException e) {
+                System.err.println("Error creating local client: " + e.getMessage());
+                e.printStackTrace();
+            }
+        } else {
+            String serverIP = args[0];
+            int serverPort;
+            try {
+                serverPort = Integer.parseInt(args[1]);
+            } catch (NumberFormatException e) {
+                System.err.println("Invalid port number: " + args[1]);
+                return;
+            }
+            String username = args[2];
+
+            System.out.println("Connecting to server at " + serverIP + ":" + serverPort + " as " + username);
+
+            try {
+                WhiteboardClient client = new WhiteboardClient(username, serverIP, serverPort);
+            } catch (RemoteException e) {
+                System.err.println("Error connecting to server: " + e.getMessage());
+                e.printStackTrace();
+
+                // 提示用户是否要在本地模式运行
+                int response = JOptionPane.showConfirmDialog(
+                        null,
+                        "Failed to connect to server. Would you like to run in local mode?",
+                        "Connection Error",
+                        JOptionPane.YES_NO_OPTION,
+                        JOptionPane.QUESTION_MESSAGE
+                );
+
+                if (response == JOptionPane.YES_OPTION) {
+                    try {
+                        WhiteboardClient localClient = new WhiteboardClient(username, false);
+                    } catch (RemoteException ex) {
+                        System.err.println("Error creating local client: " + ex.getMessage());
+                        ex.printStackTrace();
+                    }
+                }
+            }
+        }
+    }
+}
+
+===== .\src\main\java\com\whiteboard\client\WhiteboardClient.java =====
+package com.whiteboard.client;
+
+import com.whiteboard.client.shapes.Shape;
+import com.whiteboard.client.ui.WhiteboardFrame;
+import com.whiteboard.common.remote.IWhiteboardClient;
+import com.whiteboard.common.remote.IWhiteboardServer;
+
+import javax.swing.*;
+import java.io.Serializable;
+import java.rmi.NotBoundException;
+import java.rmi.RemoteException;
+import java.rmi.registry.LocateRegistry;
+import java.rmi.registry.Registry;
+import java.rmi.server.UnicastRemoteObject;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.logging.Logger;
+import java.util.Timer;
+import java.util.TimerTask;
+
+
+public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboardClient, Serializable {
+    private static final Logger logger = Logger.getLogger(WhiteboardClient.class.getName());
+
+    private WhiteboardFrame frame = null;
+    private IWhiteboardServer server;
+    private String username;
+    private String sessionId;
+    private boolean isManager;
+    private boolean isConnected = false;
+    private String currentFilename = null;
+    private volatile boolean uiInitialized = false;
+    private Timer heartbeatTimer;
+    private Timer joinRequestTimer;
+    private boolean isApproved = false;
+
+    // 缓存未处理的更新
+    private final List<Shape> pendingShapes = new ArrayList<>();
+    private final List<String> pendingShapeRemovals = new ArrayList<>();
+    private List<String> pendingUserList = null;
+    private final List<ChatMessage> pendingMessages = new ArrayList<>();
+    private Boolean pendingManagerDecision = null;
+    private boolean pendingManagerLeft = false;
+    private boolean pendingKicked = false;
+    private boolean pendingClearCanvas = false;
+
+    private static class ChatMessage {
+        final String sender;
+        final String message;
+
+        ChatMessage(String sender, String message) {
+            this.sender = sender;
+            this.message = message;
+        }
+    }
+
+    /**
+     * 本地模式构造函数（不连接服务器）
+     */
+    public WhiteboardClient(String username, boolean isManager) throws RemoteException {
+        this.username = username;
+        this.isManager = isManager;
+
+        // 初始化UI
+        initializeUI();
+    }
+
+    /**
+     * 连网模式构造函数
+     */
+    public WhiteboardClient(String username, String serverAddress, int serverPort) throws RemoteException {
+        this.username = username;
+
+        try {
+            // 连接服务器
+            connectToServer(serverAddress, serverPort);
+
+            // 初始化UI
+            initializeUI();
+
+            // 注意：注册回调会在UI初始化完成后通过事件处理
+
+        } catch (Exception e) {
+            logger.severe("Error initializing client: " + e.getMessage());
+            throw new RemoteException("Failed to initialize client", e);
+        }
+    }
+
+    /**
+     * 连接到服务器
+     */
+    private void connectToServer(String serverAddress, int serverPort) {
+        try {
+            // 获取RMI注册表
+            Registry registry = LocateRegistry.getRegistry(serverAddress, serverPort);
+
+            // 查找服务器
+            server = (IWhiteboardServer) registry.lookup("WhiteboardServer");
+
+            // 连接用户
+            sessionId = server.connectUser(username);
+
+            // 如果返回null，表示连接被拒绝（可能是第二管理员）
+            if (sessionId == null) {
+                JOptionPane.showMessageDialog(null,
+                        "Connection rejected: Another manager is already connected.",
+                        "Connection Error",
+                        JOptionPane.ERROR_MESSAGE);
+                isConnected = false;
+                return;
+            }
+
+            // 确定是否为管理员
+            isManager = sessionId != null && server.isManager(sessionId);
+            isConnected = true;
+
+            // 启动心跳
+            startHeartbeat();
+
+            // 如果不是管理员，启动加入请求
+            if (!isManager) {
+                startJoinRequestTimer();
+            } else {
+                isApproved = true; // 管理员自动批准
+            }
+
+            logger.info("Connected to server as " + (isManager ? "manager" : "regular user"));
+        } catch (RemoteException | NotBoundException e) {
+            logger.severe("Could not connect to server: " + e.getMessage());
+            JOptionPane.showMessageDialog(null,
+                    "Error connecting to server: " + e.getMessage(),
+                    "Connection Error",
+                    JOptionPane.ERROR_MESSAGE);
+            isConnected = false;
+        }
+    }
+
+    /**
+     * 初始化UI
+     */
+    private void initializeUI() {
+        SwingUtilities.invokeLater(() -> {
+            String title = "Distributed Whiteboard - " + username + (isManager ? " (Manager)" : "");
+            frame = new WhiteboardFrame(title, isManager, this);
+
+            // 设置白板面板的绘图事件监听器
+            frame.getWhiteboardPanel().setDrawingListener(shape -> {
+                if (isConnected) {
+                    try {
+                        server.addShape(shape, sessionId);
+                    } catch (RemoteException e) {
+                        logger.warning("Error sending shape to server: " + e.getMessage());
+                    }
+                }
+            });
+
+            frame.setVisible(true);
+
+            // 标记UI已初始化
+            uiInitialized = true;
+
+            // 注册客户端回调
+            if (isConnected) {
+                try {
+                    server.registerClient(sessionId, this);
+
+                    // 检索并显示当前的所有形状
+                    List<Shape> shapes = server.getAllShapes();
+                    for (Shape shape : shapes) {
+                        frame.getWhiteboardPanel().addShape(shape);
+                    }
+                } catch (RemoteException e) {
+                    logger.warning("Error registering client or getting shapes: " + e.getMessage());
+                }
+            }
+
+            // 处理所有挂起的更新
+            processPendingUpdates();
+        });
+    }
+
+    /**
+     * 处理挂起的更新
+     */
+    private void processPendingUpdates() {
+        if (!uiInitialized || frame == null) {
+            return;
+        }
+
+        // 处理挂起的形状
+        synchronized (pendingShapes) {
+            for (Shape shape : pendingShapes) {
+                frame.getWhiteboardPanel().addShape(shape);
+            }
+            pendingShapes.clear();
+        }
+
+        // 处理挂起的形状移除
+        synchronized (pendingShapeRemovals) {
+            for (String shapeId : pendingShapeRemovals) {
+                frame.getWhiteboardPanel().removeShape(shapeId);
+            }
+            pendingShapeRemovals.clear();
+        }
+
+        // 处理挂起的用户列表
+        if (pendingUserList != null) {
+            frame.updateUserList(pendingUserList);
+            pendingUserList = null;
+        }
+
+        // 处理挂起的聊天消息
+        synchronized (pendingMessages) {
+            for (ChatMessage msg : pendingMessages) {
+                frame.addChatMessage(msg.sender, msg.message);
+            }
+            pendingMessages.clear();
+        }
+
+        // 处理挂起的管理员决定
+        if (pendingManagerDecision != null) {
+            boolean approved = pendingManagerDecision;
+            pendingManagerDecision = null;
+
+            if (approved) {
+                JOptionPane.showMessageDialog(frame,
+                        "Your request to join has been approved",
+                        "Request Approved",
+                        JOptionPane.INFORMATION_MESSAGE);
+            } else {
+                JOptionPane.showMessageDialog(frame,
+                        "Your request to join has been rejected",
+                        "Request Rejected",
+                        JOptionPane.WARNING_MESSAGE);
+                System.exit(0);
+            }
+        }
+
+        // 处理挂起的管理员离开
+        if (pendingManagerLeft) {
+            pendingManagerLeft = false;
+            JOptionPane.showMessageDialog(frame,
+                    "The manager has left the session. The application will now close.",
+                    "Session Ended",
+                    JOptionPane.WARNING_MESSAGE);
+            System.exit(0);
+        }
+
+        // 处理挂起的踢出
+        if (pendingKicked) {
+            pendingKicked = false;
+            JOptionPane.showMessageDialog(frame,
+                    "You have been kicked out by the manager.",
+                    "Kicked Out",
+                    JOptionPane.WARNING_MESSAGE);
+            System.exit(0);
+        }
+
+        // 处理挂起的清除画布
+        if (pendingClearCanvas) {
+            pendingClearCanvas = false;
+            frame.getWhiteboardPanel().clearCanvas();
+        }
+    }
+
+    // IWhiteboardClient 接口实现
+    @Override
+    public void updateShape(Shape shape) throws RemoteException {
+        if (uiInitialized && frame != null) {
+            SwingUtilities.invokeLater(() -> {
+                frame.getWhiteboardPanel().addShape(shape);
+            });
+        } else {
+            // 缓存更新
+            synchronized (pendingShapes) {
+                pendingShapes.add(shape);
+            }
+            logger.info("Cached shape update: " + shape.getId());
+        }
+    }
+
+    @Override
+    public void removeShape(String shapeId) throws RemoteException {
+        if (uiInitialized && frame != null) {
+            SwingUtilities.invokeLater(() -> {
+                frame.getWhiteboardPanel().removeShape(shapeId);
+            });
+        } else {
+            // 缓存更新
+            synchronized (pendingShapeRemovals) {
+                pendingShapeRemovals.add(shapeId);
+            }
+            logger.info("Cached shape removal: " + shapeId);
+        }
+    }
+
+    @Override
+    public void updateUserList(List<String> users) throws RemoteException {
+        if (uiInitialized && frame != null) {
+            SwingUtilities.invokeLater(() -> {
+                frame.updateUserList(users);
+            });
+        } else {
+            // 缓存更新
+            pendingUserList = new ArrayList<>(users);
+            logger.info("Cached user list update");
+        }
+    }
+
+    @Override
+    public void receiveMessage(String senderName, String message) throws RemoteException {
+        if (uiInitialized && frame != null) {
+            SwingUtilities.invokeLater(() -> {
+                frame.addChatMessage(senderName, message);
+            });
+        } else {
+            // 缓存更新
+            synchronized (pendingMessages) {
+                pendingMessages.add(new ChatMessage(senderName, message));
+            }
+            logger.info("Cached chat message from " + senderName);
+        }
+    }
+
+    @Override
+    public void notifyManagerDecision(boolean approved) throws RemoteException {
+        this.isApproved = approved;
+
+        if (uiInitialized && frame != null) {
+            SwingUtilities.invokeLater(() -> {
+                if (approved) {
+                    JOptionPane.showMessageDialog(frame,
+                            "Your request to join has been approved",
+                            "Request Approved",
+                            JOptionPane.INFORMATION_MESSAGE);
+                } else {
+                    JOptionPane.showMessageDialog(frame,
+                            "Your request to join has been rejected",
+                            "Request Rejected",
+                            JOptionPane.WARNING_MESSAGE);
+
+                    // 5秒后关闭应用
+                    Timer closeTimer = new Timer();
+                    closeTimer.schedule(new TimerTask() {
+                        @Override
+                        public void run() {
+                            System.exit(0);
+                        }
+                    }, 5000);
+                }
+            });
+        } else {
+            // 缓存更新
+            pendingManagerDecision = approved;
+            logger.info("Cached manager decision: " + (approved ? "approved" : "rejected"));
+
+            // 如果被拒绝，立即退出
+            if (!approved) {
+                System.exit(0);
+            }
+        }
+    }
+
+    @Override
+    public void notifyManagerLeft() throws RemoteException {
+        if (uiInitialized && frame != null) {
+            SwingUtilities.invokeLater(() -> {
+                JOptionPane.showMessageDialog(frame,
+                        "The manager has left the session. The application will now close.",
+                        "Session Ended",
+                        JOptionPane.WARNING_MESSAGE);
+                System.exit(0);
+            });
+        } else {
+            // 缓存更新
+            pendingManagerLeft = true;
+            logger.info("Cached manager left notification");
+        }
+    }
+
+    @Override
+    public void notifyKicked() throws RemoteException {
+        if (uiInitialized && frame != null) {
+            SwingUtilities.invokeLater(() -> {
+                JOptionPane.showMessageDialog(frame,
+                        "You have been kicked out by the manager.",
+                        "Kicked Out",
+                        JOptionPane.WARNING_MESSAGE);
+                System.exit(0);
+            });
+        } else {
+            // 缓存更新
+            pendingKicked = true;
+            logger.info("Cached kick notification");
+        }
+    }
+
+    @Override
+    public void receiveClearCanvas() throws RemoteException {
+        if (uiInitialized && frame != null) {
+            SwingUtilities.invokeLater(() -> {
+                frame.getWhiteboardPanel().clearCanvas();
+            });
+        } else {
+            // 缓存更新
+            pendingClearCanvas = true;
+            logger.info("Cached clear canvas notification");
+        }
+    }
+
+    // 其他方法保持不变...
+
+    /**
+     * 发送形状到服务器
+     */
+    public void sendShape(Shape shape) {
+        if (isConnected) {
+            try {
+                logger.info("Sending shape to server: " + shape.getId());
+                server.addShape(shape, sessionId);
+            } catch (RemoteException e) {
+                logger.warning("Error sending shape to server: " + e.getMessage());
+                handleConnectionError(e);
+            }
+        }
+    }
+
+    /**
+     * 发送聊天消息
+     */
+    public void sendChatMessage(String message) {
+        if (isConnected) {
+            try {
+                logger.info("Sending chat message: " + message);
+                server.sendChatMessage(message, sessionId);
+                // 在本地显示自己的消息
+                if (uiInitialized && frame != null) {
+                    frame.addChatMessage("Me", message);
+                }
+            } catch (RemoteException e) {
+                logger.warning("Error sending chat message: " + e.getMessage());
+                handleConnectionError(e);
+            }
+        }
+    }
+
+    /**
+     * 断开连接
+     */
+    public void disconnect() {
+        if (isConnected) {
+            try {
+                server.disconnectUser(sessionId);
+                isConnected = false;
+                logger.info("Disconnected from server");
+            } catch (RemoteException e) {
+                logger.warning("Error disconnecting from server: " + e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * 处理连接错误
+     */
+    private void handleConnectionError(Exception e) {
+        isConnected = false;
+        if (uiInitialized && frame != null) {
+            SwingUtilities.invokeLater(() -> {
+                JOptionPane.showMessageDialog(frame,
+                        "Lost connection to server: " + e.getMessage(),
+                        "Connection Error",
+                        JOptionPane.ERROR_MESSAGE);
+            });
+        } else {
+            logger.severe("Lost connection to server: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 踢出用户
+     */
+    public boolean kickUser(String username) {
+        if (isConnected && isManager) {
+            try {
+                return server.kickUser(username, sessionId);
+            } catch (RemoteException e) {
+                logger.warning("Error kicking user: " + e.getMessage());
+                handleConnectionError(e);
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 新建白板
+     */
+    public boolean newWhiteboard() {
+        if (isConnected && isManager) {
+            try {
+                // 在服务器清除画布
+                server.clearCanvas(sessionId);
+                currentFilename = null;
+                return true;
+            } catch (RemoteException e) {
+                logger.warning("Error creating new whiteboard: " + e.getMessage());
+                handleConnectionError(e);
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 保存白板
+     */
+    public boolean saveWhiteboard() {
+        if (isConnected && isManager && currentFilename != null) {
+            try {
+                return server.saveWhiteboard(currentFilename, sessionId);
+            } catch (RemoteException e) {
+                logger.warning("Error saving whiteboard: " + e.getMessage());
+                handleConnectionError(e);
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 另存为
+     */
+    public boolean saveWhiteboardAs(String filename) {
+        if (isConnected && isManager) {
+            try {
+                boolean success = server.saveWhiteboard(filename, sessionId);
+                if (success) {
+                    this.currentFilename = filename;
+                }
+                return success;
+            } catch (RemoteException e) {
+                logger.warning("Error saving whiteboard: " + e.getMessage());
+                handleConnectionError(e);
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 加载白板
+     */
+    public boolean loadWhiteboard(String filename) {
+        if (isConnected && isManager) {
+            try {
+                boolean success = server.loadWhiteboard(filename, sessionId);
+                if (success) {
+                    this.currentFilename = filename;
+                }
+                return success;
+            } catch (RemoteException e) {
+                logger.warning("Error loading whiteboard: " + e.getMessage());
+                handleConnectionError(e);
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 检查是否有文件名
+     */
+    public boolean hasFilename() {
+        return currentFilename != null;
+    }
+
+    /**
+     * 初始化心跳机制
+     */
+    private void startHeartbeat() {
+        if (heartbeatTimer != null) {
+            heartbeatTimer.cancel();
+        }
+
+        heartbeatTimer = new Timer(true);
+        heartbeatTimer.scheduleAtFixedRate(new TimerTask() {
+            @Override
+            public void run() {
+                if (isConnected) {
+                    try {
+                        // 发送心跳
+                        server.updateUserActivity(sessionId);
+                    } catch (RemoteException e) {
+                        logger.warning("Heartbeat failed: " + e.getMessage());
+                        handleConnectionError(e);
+                    }
+                }
+            }
+        }, 5000, 5000); // 每5秒发送一次心跳
+    }
+
+    /**
+     * 初始化加入请求定时器
+     */
+    private void startJoinRequestTimer() {
+        if (joinRequestTimer != null) {
+            joinRequestTimer.cancel();
+        }
+
+        joinRequestTimer = new Timer(true);
+        joinRequestTimer.scheduleAtFixedRate(new TimerTask() {
+            @Override
+            public void run() {
+                if (isConnected && !isApproved && !isManager) {
+                    sendJoinRequest();
+                } else if (isApproved || isManager) {
+                    joinRequestTimer.cancel();
+                }
+            }
+        }, 0, 5000); // 每5秒发送一次请求
+    }
+
+    /**
+     * 发送加入请求
+     */
+    private void sendJoinRequest() {
+        if (isConnected && server != null) {
+            try {
+                // 发送加入请求
+                server.requestJoin(username, sessionId);
+                logger.info("Sent join request");
+            } catch (RemoteException e) {
+                logger.warning("Error sending join request: " + e.getMessage());
+                handleConnectionError(e);
+            }
+        }
+    }
+
+    /**
+     * 实现新增的通知方法：待处理的加入请求
+     */
+    @Override
+    public void notifyPendingJoinRequest(String username, boolean isOnline) throws RemoteException {
+        if (uiInitialized && frame != null && isManager) {
+            SwingUtilities.invokeLater(() -> {
+                frame.showJoinRequest(username, isOnline);
+            });
+        }
+    }
+
+    /**
+     * 实现新增的通知方法：服务器断开连接
+     */
+    @Override
+    public void notifyServerDisconnected() throws RemoteException {
+        if (uiInitialized && frame != null) {
+            SwingUtilities.invokeLater(() -> {
+                JOptionPane.showMessageDialog(frame,
+                        "Lost connection to server. The application will close in 5 seconds.",
+                        "Server Disconnected",
+                        JOptionPane.ERROR_MESSAGE);
+
+                // 5秒后关闭应用
+                Timer closeTimer = new Timer();
+                closeTimer.schedule(new TimerTask() {
+                    @Override
+                    public void run() {
+                        System.exit(0);
+                    }
+                }, 5000);
+            });
+        }
+    }
+
+    /**
+     * 实现心跳响应方法
+     */
+    @Override
+    public void heartbeat() throws RemoteException {
+        // 心跳响应，无需具体操作
+    }
+
+    /**
+     * 批准用户加入
+     */
+    public boolean approveUser(String username) {
+        if (isConnected && isManager) {
+            try {
+                return server.approveUser(username, sessionId);
+            } catch (RemoteException e) {
+                logger.warning("Error approving user: " + e.getMessage());
+                handleConnectionError(e);
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 拒绝用户加入
+     */
+    public boolean rejectUser(String username) {
+        if (isConnected && isManager) {
+            try {
+                server.rejectUser(username, sessionId);
+                return true;
+            } catch (RemoteException e) {
+                logger.warning("Error rejecting user: " + e.getMessage());
+                handleConnectionError(e);
+            }
+        }
+        return false;
+    }
+}
+
+===== .\src\main\java\com\whiteboard\client\shapes\ErasureShape.java =====
+package com.whiteboard.client.shapes;
+
+import java.awt.*;
+import java.util.ArrayList;
+import java.util.List;
+
+public class ErasureShape extends Shape {
+    private List<Point> path;
+    private int eraserSize;
+
+    public ErasureShape(List<Point> path, int eraserSize, Color backgroundColor) {
+        // 起点和终点使用路径的首尾点
+        super(path.get(0), path.get(path.size()-1), backgroundColor, eraserSize);
+        this.path = new ArrayList<>(path);
+        this.eraserSize = eraserSize;
+    }
+
+    @Override
+    public void draw(Graphics2D g) {
+        // 保存原始设置
+        Stroke originalStroke = g.getStroke();
+        Color originalColor = g.getColor();
+
+        // 设置擦除参数
+        g.setColor(getDrawColor());
+        g.setStroke(new BasicStroke(eraserSize, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+
+        // 绘制路径
+        for (int i = 0; i < path.size() - 1; i++) {
+            Point p1 = path.get(i);
+            Point p2 = path.get(i + 1);
+            g.drawLine(p1.x, p1.y, p2.x, p2.y);
+        }
+
+        // 恢复原始设置
+        g.setStroke(originalStroke);
+        g.setColor(originalColor);
+    }
+
+    @Override
+    public boolean contains(Point p) {
+        // 擦除形状不需要被选中/检测，返回false
+        return false;
+    }
+}
+
+===== .\src\main\java\com\whiteboard\client\shapes\FreeDrawing.java =====
+package com.whiteboard.client.shapes;
+
+
+import java.awt.*;
+import java.util.ArrayList;
+import java.util.List;
+
+public class FreeDrawing extends Shape {
+    private List<Point> points;
+
+    public FreeDrawing(Point start, Color color, int strokeWidth) {
+        super(start, start, color, strokeWidth);
+        points = new ArrayList<>();
+        points.add(start);
+    }
+
+    public void addPoint(Point p) {
+        points.add(p);
+        endPoint = p;
+    }
+
+    @Override
+    public void draw(Graphics2D g) {
+        g.setColor(getDrawColor());
+        g.setStroke(new BasicStroke(strokeWidth, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+
+        for (int i = 0; i < points.size() - 1; i++) {
+            Point p1 = points.get(i);
+            Point p2 = points.get(i + 1);
+            g.drawLine(p1.x, p1.y, p2.x, p2.y);
+        }
+    }
+
+    @Override
+    public boolean contains(Point p) {
+        for (int i = 0; i < points.size() - 1; i++) {
+            Point p1 = points.get(i);
+            Point p2 = points.get(i + 1);
+            double dist = distanceToLine(p, p1, p2);
+            if (dist <= strokeWidth + 2) return true;
+        }
+        return false;
+    }
+
+    private double distanceToLine(Point p, Point start, Point end) {
+        double normalLength = Math.sqrt((end.x-start.x)*(end.x-start.x) +
+                (end.y-start.y)*(end.y-start.y));
+        return Math.abs((p.x-start.x)*(end.y-start.y)-(p.y-start.y)*(end.x-start.x))/normalLength;
+    }
+}
+
+===== .\src\main\java\com\whiteboard\client\shapes\Line.java =====
+package com.whiteboard.client.shapes;
+
+import java.awt.*;
+
+public class Line extends Shape {
+    public Line(Point start, Point end, Color color, int strokeWidth) {
+        super(start, end, color, strokeWidth);
+    }
+
+    @Override
+    public void draw(Graphics2D g) {
+        g.setColor(getDrawColor());
+        g.setStroke(new BasicStroke(strokeWidth));
+        g.drawLine(startPoint.x, startPoint.y, endPoint.x, endPoint.y);
+    }
+
+    @Override
+    public boolean contains(Point p) {
+        double distanceToLine = distanceToLine(p, startPoint, endPoint);
+        return distanceToLine <= strokeWidth + 2;
+    }
+
+    private double distanceToLine(Point p, Point start, Point end) {
+        double normalLength = Math.sqrt((end.x-start.x)*(end.x-start.x) +
+                (end.y-start.y)*(end.y-start.y));
+        return Math.abs((p.x-start.x)*(end.y-start.y)-(p.y-start.y)*(end.x-start.x))/normalLength;
+    }
+}
+
+===== .\src\main\java\com\whiteboard\client\shapes\Oval.java =====
+package com.whiteboard.client.shapes;
+
+import java.awt.*;
+
+public class Oval extends Shape {
+    public Oval(Point start, Point end, Color color, int strokeWidth) {
+        super(start, end, color, strokeWidth);
+    }
+
+    @Override
+    public void draw(Graphics2D g) {
+        g.setColor(getDrawColor());
+        g.setStroke(new BasicStroke(strokeWidth));
+
+        int x = Math.min(startPoint.x, endPoint.x);
+        int y = Math.min(startPoint.y, endPoint.y);
+        int width = Math.abs(endPoint.x - startPoint.x);
+        int height = Math.abs(endPoint.y - startPoint.y);
+
+        g.drawOval(x, y, width, height);
+    }
+
+    @Override
+    public boolean contains(Point p) {
+        int x = Math.min(startPoint.x, endPoint.x);
+        int y = Math.min(startPoint.y, endPoint.y);
+        int width = Math.abs(endPoint.x - startPoint.x);
+        int height = Math.abs(endPoint.y - startPoint.y);
+
+        double rx = width / 2.0;
+        double ry = height / 2.0;
+        double cx = x + rx;
+        double cy = y + ry;
+
+        double normX = (p.x - cx) / rx;
+        double normY = (p.y - cy) / ry;
+        double dist = normX * normX + normY * normY;
+
+        return Math.abs(dist - 1.0) <= (strokeWidth / Math.min(rx, ry));
+    }
+}
+
+===== .\src\main\java\com\whiteboard\client\shapes\Rectangle.java =====
+package com.whiteboard.client.shapes;
+
+import java.awt.*;
+
+public class Rectangle extends Shape {
+    public Rectangle(Point start, Point end, Color color, int strokeWidth) {
+        super(start, end, color, strokeWidth);
+    }
+
+    @Override
+    public void draw(Graphics2D g) {
+        g.setColor(getDrawColor());
+        g.setStroke(new BasicStroke(strokeWidth));
+
+        int x = Math.min(startPoint.x, endPoint.x);
+        int y = Math.min(startPoint.y, endPoint.y);
+        int width = Math.abs(endPoint.x - startPoint.x);
+        int height = Math.abs(endPoint.y - startPoint.y);
+
+        g.drawRect(x, y, width, height);
+    }
+
+    @Override
+    public boolean contains(Point p) {
+        int x = Math.min(startPoint.x, endPoint.x);
+        int y = Math.min(startPoint.y, endPoint.y);
+        int width = Math.abs(endPoint.x - startPoint.x);
+        int height = Math.abs(endPoint.y - startPoint.y);
+
+        return p.x >= x - strokeWidth && p.x <= x + width + strokeWidth &&
+                p.y >= y - strokeWidth && p.y <= y + height + strokeWidth &&
+                (Math.abs(p.x - x) <= strokeWidth ||
+                        Math.abs(p.x - (x + width)) <= strokeWidth ||
+                        Math.abs(p.y - y) <= strokeWidth ||
+                        Math.abs(p.y - (y + height)) <= strokeWidth);
+    }
+}
+
+===== .\src\main\java\com\whiteboard\client\shapes\Shape.java =====
+package com.whiteboard.client.shapes;
+
+import java.awt.*;
+import java.io.Serializable;
+import java.util.UUID;
+
+// abstract class Shape
+public abstract class Shape implements Serializable {
+    private static final long serialVersionUID = 1L;
+
+    protected String id;
+    protected Color color;
+    protected Point startPoint;
+    protected Point endPoint;
+    protected int strokeWidth;
+    // for temporary use
+    protected int tempAlpha = -1;
+// constructor
+    public Shape(Point startPoint, Point endPoint, Color color, int strokeWidth) {
+        this.id = UUID.randomUUID().toString();
+        this.startPoint = startPoint;
+        this.endPoint = endPoint;
+        this.color = color;
+        this.strokeWidth = strokeWidth;
+    }
+
+    public abstract void draw(Graphics2D g);
+    public abstract boolean contains(Point p);
+
+    // Getters and setters
+    public String getId() { return id; }
+    public Color getColor() { return color; }
+    public Point getStartPoint() { return startPoint; }
+    public Point getEndPoint() { return endPoint; }
+    public void setEndPoint(Point endPoint) { this.endPoint = endPoint; }
+    public int getStrokeWidth() { return strokeWidth; }
+
+    // 获取绘制颜色，考虑临时透明度
+    protected Color getDrawColor() {
+        if (tempAlpha >= 0) {
+            return new Color(
+                    color.getRed(),
+                    color.getGreen(),
+                    color.getBlue(),
+                    tempAlpha
+            );
+        }
+        return color;
+    }
+
+    public int getAlpha() {
+        return color.getAlpha();
+    }
+
+    public void setTempAlpha(int alpha) {
+        this.tempAlpha = alpha;
+    }
+
+    public void clearTempAlpha() {
+        this.tempAlpha = -1;
+    }
+
+    public boolean hasTempAlpha() {
+        return tempAlpha >= 0;
+    }
+}
+
+===== .\src\main\java\com\whiteboard\client\shapes\Text.java =====
+package com.whiteboard.client.shapes;
+
+import java.awt.*;
+
+public class Text extends Shape {
+    private String text;
+    private Font font;
+
+    public Text(Point position, String text, Color color, Font font) {
+        super(position, position, color, 1);
+        this.text = text;
+        this.font = font;
+    }
+
+    @Override
+    public void draw(Graphics2D g) {
+        // 保存原始字体
+        Font originalFont = g.getFont();
+
+        // 设置正确的绘制属性
+        g.setColor(getDrawColor());
+
+        // 确保使用原始的Unicode支持字体
+        Font unicodeFont = new Font("Arial Unicode MS", font.getStyle(), font.getSize());
+        try {
+            g.setFont(unicodeFont);
+        } catch (Exception e) {
+            // 如果无法设置首选字体，使用原始字体
+            g.setFont(font);
+        }
+
+        // 绘制文本
+        g.drawString(text, startPoint.x, startPoint.y);
+
+        // 恢复原始字体
+        g.setFont(originalFont);
+    }
+
+    @Override
+    public boolean contains(Point p) {
+        FontMetrics metrics = new FontMetrics(font) {};
+        int textWidth = metrics.stringWidth(text);
+        int textHeight = metrics.getHeight();
+
+        return p.x >= startPoint.x && p.x <= startPoint.x + textWidth &&
+                p.y >= startPoint.y - textHeight && p.y <= startPoint.y;
+    }
+
+    public String getText() {
+        return text;
+    }
+
+    public Font getFont() {
+        return font;
+    }
+}
+
+
+===== .\src\main\java\com\whiteboard\client\shapes\Triangle.java =====
+package com.whiteboard.client.shapes;
+
+import java.awt.*;
+
+public class Triangle extends Shape {
+    public Triangle(Point start, Point end, Color color, int strokeWidth) {
+        super(start, end, color, strokeWidth);
+    }
+
+    @Override
+    public void draw(Graphics2D g) {
+        g.setColor(getDrawColor());
+        g.setStroke(new BasicStroke(strokeWidth));
+
+        // 计算三角形的三个点
+        int[] xPoints = new int[3];
+        int[] yPoints = new int[3];
+
+        xPoints[0] = startPoint.x;
+        yPoints[0] = endPoint.y;
+
+        xPoints[1] = (startPoint.x + endPoint.x) / 2;
+        yPoints[1] = startPoint.y;
+
+        xPoints[2] = endPoint.x;
+        yPoints[2] = endPoint.y;
+
+        g.drawPolygon(xPoints, yPoints, 3);
+    }
+
+    @Override
+    public boolean contains(Point p) {
+        int[] xPoints = new int[3];
+        int[] yPoints = new int[3];
+
+        xPoints[0] = startPoint.x;
+        yPoints[0] = endPoint.y;
+
+        xPoints[1] = (startPoint.x + endPoint.x) / 2;
+        yPoints[1] = startPoint.y;
+
+        xPoints[2] = endPoint.x;
+        yPoints[2] = endPoint.y;
+
+        for (int i = 0; i < 3; i++) {
+            int j = (i + 1) % 3;
+            Point lineStart = new Point(xPoints[i], yPoints[i]);
+            Point lineEnd = new Point(xPoints[j], yPoints[j]);
+            double dist = distanceToLine(p, lineStart, lineEnd);
+            if (dist <= strokeWidth) return true;
+        }
+        return false;
+    }
+
+    private double distanceToLine(Point p, Point start, Point end) {
+        double normalLength = Math.sqrt((end.x-start.x)*(end.x-start.x) +
+                (end.y-start.y)*(end.y-start.y));
+        return Math.abs((p.x-start.x)*(end.y-start.y)-(p.y-start.y)*(end.x-start.x))/normalLength;
+    }
+}
+
+===== .\src\main\java\com\whiteboard\client\tools\DrawingTool.java =====
+package com.whiteboard.client.tools;
+
+import com.whiteboard.client.shapes.Shape;
+import java.awt.Point;
+
+public interface DrawingTool {
+    void mousePressed(Point p);
+    void mouseDragged(Point p);
+    void mouseReleased(Point p);
+    Shape getCreatedShape();
+}
+
+===== .\src\main\java\com\whiteboard\client\tools\EraserTool.java =====
+package com.whiteboard.client.tools;
+
+import com.whiteboard.client.shapes.Shape;
+import java.awt.Point;
+import java.util.ArrayList;
+import java.util.List;
+
+public class EraserTool implements DrawingTool {
+    // 擦除模式枚举
+    public enum EraseMode {
+        OBJECT("Object Eraser"),
+        FREE("Freehand Eraser");
+        private final String displayName;
+
+        EraseMode(String displayName) {
+            this.displayName = displayName;
+        }
+
+        public String getDisplayName() {
+            return displayName;
+        }
+    }
+
+    private EraseMode mode = EraseMode.FREE; // default mode
+    private int eraserSize;
+    private Point currentPoint;
+    private List<Shape> shapesToRemove = new ArrayList<>();
+    private List<Shape> shapesToPreview = new ArrayList<>(); // 预览透明度改变的形状
+    private List<Point> erasePath = new ArrayList<>(); // 记录橡皮擦轨迹
+
+    public EraserTool(int eraserSize) {
+        this.eraserSize = eraserSize;
+    }
+
+    @Override
+    public void mousePressed(Point p) {
+        currentPoint = p;
+        erasePath.clear();
+        erasePath.add(p);
+
+        if (mode == EraseMode.OBJECT) {
+            // 对象擦除模式
+            shapesToPreview.clear();
+        }
+    }
+
+    @Override
+    public void mouseDragged(Point p) {
+        currentPoint = p;
+        erasePath.add(p);
+    }
+
+    @Override
+    public Shape getCreatedShape() {
+        // 橡皮擦不创建形状，返回null
+        return null;
+    }
+
+    public void setMode(EraseMode mode) {
+        this.mode = mode;
+    }
+
+    public Point getCurrentPoint() {
+        return currentPoint;
+    }
+
+    public int getEraserSize() {
+        return eraserSize;
+    }
+
+    public List<Shape> getShapesToRemove() {
+        return shapesToRemove;
+    }
+
+    public void clearShapesToRemove() {
+        shapesToRemove.clear();
+    }
+
+    public void addShapeToRemove(Shape shape) {
+        if (!shapesToRemove.contains(shape)) {
+            shapesToRemove.add(shape);
+        }
+    }
+
+    public List<Shape> getShapesToPreview() {
+        return shapesToPreview;
+    }
+
+    public void addShapeToPreview(Shape shape) {
+        if (!shapesToPreview.contains(shape)) {
+            shapesToPreview.add(shape);
+        }
+    }
+
+    public void clearShapesToPreview() {
+        shapesToPreview.clear();
+    }
+
+    public List<Point> getErasePath() {
+        return erasePath;
+    }
+
+    public EraseMode getMode() {
+        return mode;
+    }
+
+    public void setEraserSize(int eraserSize) {
+        this.eraserSize = eraserSize;
+    }
+
+    public void clearPath() {
+        erasePath.clear();
+    }
+    public void setCurrentPoint(Point p) {
+        this.currentPoint = p;
+    }
+    // 在EraserTool类中添加释放状态标志
+    private boolean released = false;
+
+
+    @Override
+    public void mouseReleased(Point p) {
+        currentPoint = p;
+        erasePath.add(p);
+        released = true; // 设置释放标志
+
+        // 实际擦除逻辑将在WhiteboardPanel中处理
+    }
+
+    public boolean isReleased() {
+        return released;
+    }
+}
+
+===== .\src\main\java\com\whiteboard\client\tools\LineTool.java =====
+package com.whiteboard.client.tools;
+
+import com.whiteboard.client.shapes.Line;
+import com.whiteboard.client.shapes.Shape;
+import java.awt.Color;
+import java.awt.Point;
+
+public class LineTool implements DrawingTool {
+    private Line currentLine;
+    private Color color;
+    private int strokeWidth;
+
+    public LineTool(Color color, int strokeWidth) {
+        this.color = color;
+        this.strokeWidth = strokeWidth;
+    }
+
+    @Override
+    public void mousePressed(Point p) {
+        currentLine = new Line(p, p, color, strokeWidth);
+    }
+
+    @Override
+    public void mouseDragged(Point p) {
+        currentLine.setEndPoint(p);
+    }
+
+    @Override
+    public void mouseReleased(Point p) {
+        currentLine.setEndPoint(p);
+    }
+
+    @Override
+    public Shape getCreatedShape() {
+        return currentLine;
+    }
+}
+
+===== .\src\main\java\com\whiteboard\client\tools\OvalTool.java =====
+package com.whiteboard.client.tools;
+
+import com.whiteboard.client.shapes.Oval;
+import com.whiteboard.client.shapes.Shape;
+import java.awt.Color;
+import java.awt.Point;
+
+public class OvalTool implements DrawingTool {
+    private Oval currentOval;
+    private Color color;
+    private int strokeWidth;
+
+    public OvalTool(Color color, int strokeWidth) {
+        this.color = color;
+        this.strokeWidth = strokeWidth;
+    }
+
+    @Override
+    public void mousePressed(Point p) {
+        currentOval = new Oval(p, p, color, strokeWidth);
+    }
+
+    @Override
+    public void mouseDragged(Point p) {
+        currentOval.setEndPoint(p);
+    }
+
+    @Override
+    public void mouseReleased(Point p) {
+        currentOval.setEndPoint(p);
+    }
+
+    @Override
+    public Shape getCreatedShape() {
+        return currentOval;
+    }
+}
+
+===== .\src\main\java\com\whiteboard\client\tools\PencilTool.java =====
+package com.whiteboard.client.tools;
+
+import com.whiteboard.client.shapes.FreeDrawing;
+import com.whiteboard.client.shapes.Shape;
+import java.awt.Color;
+import java.awt.Point;
+
+public class PencilTool implements DrawingTool {
+    private FreeDrawing currentFreeDraw;
+    private Color color;
+    private int strokeWidth;
+
+    public PencilTool(Color color, int strokeWidth) {
+        this.color = color;
+        this.strokeWidth = strokeWidth;
+    }
+
+    @Override
+    public void mousePressed(Point p) {
+        currentFreeDraw = new FreeDrawing(p, color, strokeWidth);
+    }
+
+    @Override
+    public void mouseDragged(Point p) {
+        currentFreeDraw.addPoint(p);
+    }
+
+    @Override
+    public void mouseReleased(Point p) {
+        currentFreeDraw.addPoint(p);
+    }
+
+    @Override
+    public Shape getCreatedShape() {
+        return currentFreeDraw;
+    }
+}
+
+===== .\src\main\java\com\whiteboard\client\tools\RectangleTool.java =====
+package com.whiteboard.client.tools;
+
+import com.whiteboard.client.shapes.Rectangle;
+import com.whiteboard.client.shapes.Shape;
+import java.awt.Color;
+import java.awt.Point;
+
+public class RectangleTool implements DrawingTool {
+    private Rectangle currentRect;
+    private Color color;
+    private int strokeWidth;
+
+    public RectangleTool(Color color, int strokeWidth) {
+        this.color = color;
+        this.strokeWidth = strokeWidth;
+    }
+
+    @Override
+    public void mousePressed(Point p) {
+        currentRect = new Rectangle(p, p, color, strokeWidth);
+    }
+
+    @Override
+    public void mouseDragged(Point p) {
+        currentRect.setEndPoint(p);
+    }
+
+    @Override
+    public void mouseReleased(Point p) {
+        currentRect.setEndPoint(p);
+    }
+
+    @Override
+    public Shape getCreatedShape() {
+        return currentRect;
+    }
+}
+
+===== .\src\main\java\com\whiteboard\client\tools\TextTool.java =====
+package com.whiteboard.client.tools;
+
+import com.whiteboard.client.shapes.Text;
+import com.whiteboard.client.shapes.Shape;
+import java.awt.Color;
+import java.awt.Font;
+import java.awt.Point;
+
+public class TextTool implements DrawingTool {
+    private Text currentText;
+    private Color color;
+    private Font font;
+    private String text = "";
+    private Point position;
+    private boolean isEditing = false;
+    private Point currentPosition;
+
+    public TextTool(Color color, Font font) {
+        this.color = color;
+        this.font = font;
+    }
+
+    public void setText(String text) {
+        this.text = text;
+        // 如果当前正在编辑，更新预览文本
+        if (isEditing && position != null) {
+            currentText = new Text(position, text, color, font);
+        }
+    }
+
+    public void setPosition(Point p) {
+        this.position = p;
+    }
+
+    public void startEditing() {
+        isEditing = true;
+        text = "";
+        if (position != null) {
+            // 创建预览文本
+            currentText = new Text(position, text, color, font);
+        }
+    }
+
+    public void finishEditing() {
+        isEditing = false;
+        // 如果文本为空或只有空格，不创建文本对象
+        if (text != null && !text.trim().isEmpty()) {
+            currentText = new Text(position, text, color, font);
+        } else {
+            currentText = null;
+        }
+    }
+
+    public boolean isEditing() {
+        return isEditing;
+    }
+
+    @Override
+    public void mousePressed(Point p) {
+        position = p;
+        startEditing();
+    }
+
+    @Override
+    public void mouseDragged(Point p) {
+        // 文本工具不处理拖动
+    }
+
+    @Override
+    public void mouseReleased(Point p) {
+        // 文本工具不处理释放
+    }
+
+    @Override
+    public Shape getCreatedShape() {
+        return currentText;
+    }
+
+    public Font getFont() {
+        return font;
+    }
+
+    public void setFont(Font font) {
+        this.font = font;
+        if (isEditing && position != null) {
+            currentText = new Text(position, text, color, font);
+        }
+    }
+
+    public String getText() {
+        return text;
+    }
+
+    // 为了完全清除状态，可以添加一个重置方法
+    public void reset() {
+        text = "";
+        currentText = null;
+        isEditing = false;
+    }
+}
+
+===== .\src\main\java\com\whiteboard\client\tools\ToolFactory.java =====
+package com.whiteboard.client.tools;
+
+import java.awt.Color;
+import java.awt.Font;
+
+public class ToolFactory {
+    public enum ToolType {
+        PENCIL, LINE, RECTANGLE, OVAL, TRIANGLE, TEXT, ERASER
+    }
+
+    public static DrawingTool createTool(ToolType type, Color color, int strokeWidth) {
+        switch (type) {
+            case PENCIL:
+                return new PencilTool(color, strokeWidth);
+            case LINE:
+                return new LineTool(color, strokeWidth);
+            case RECTANGLE:
+                return new RectangleTool(color, strokeWidth);
+            case OVAL:
+                return new OvalTool(color, strokeWidth);
+            case TRIANGLE:
+                return new TriangleTool(color, strokeWidth);
+            case TEXT:
+                return new TextTool(color, new Font("Arial", Font.PLAIN, 14));
+            case ERASER:
+                return new EraserTool(strokeWidth * 5);
+            default:
+                return new PencilTool(color, strokeWidth);
+        }
+    }
+}
+
+===== .\src\main\java\com\whiteboard\client\tools\TriangleTool.java =====
+package com.whiteboard.client.tools;
+
+import com.whiteboard.client.shapes.Triangle;
+import com.whiteboard.client.shapes.Shape;
+import java.awt.Color;
+import java.awt.Point;
+
+public class TriangleTool implements DrawingTool {
+    private Triangle currentTriangle;
+    private Color color;
+    private int strokeWidth;
+
+    public TriangleTool(Color color, int strokeWidth) {
+        this.color = color;
+        this.strokeWidth = strokeWidth;
+    }
+
+    @Override
+    public void mousePressed(Point p) {
+        currentTriangle = new Triangle(p, p, color, strokeWidth);
+    }
+
+    @Override
+    public void mouseDragged(Point p) {
+        currentTriangle.setEndPoint(p);
+    }
+
+    @Override
+    public void mouseReleased(Point p) {
+        currentTriangle.setEndPoint(p);
+    }
+
+    @Override
+    public Shape getCreatedShape() {
+        return currentTriangle;
+    }
+}
+
+===== .\src\main\java\com\whiteboard\client\ui\AdvancedColorPanel.java =====
+package com.whiteboard.client.ui;
+
+import javax.swing.*;
+import javax.swing.border.TitledBorder;
+import javax.swing.event.ChangeEvent;
+import javax.swing.event.ChangeListener;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
+import javax.swing.text.AbstractDocument;
+import javax.swing.text.AttributeSet;
+import javax.swing.text.BadLocationException;
+import javax.swing.text.DocumentFilter;
+import java.awt.*;
+import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener;
+import java.awt.event.FocusAdapter;
+import java.awt.event.FocusEvent;
+import java.util.function.Consumer;
+
+public class AdvancedColorPanel extends JPanel {
+    private Color currentColor = Color.BLACK;
+    private Color originalColor = Color.BLACK; // 保存原始颜色，用于取消操作
+    private Color lastAppliedColor = Color.BLACK; // 保存最后应用的颜色
+    private JPanel colorPreview;
+    private JSlider redSlider, greenSlider, blueSlider, alphaSlider;
+    private JTextField redField, greenField, blueField, alphaField, hexField;
+    private Consumer<Color> colorChangeListener;
+    private boolean updatingControls = false;
+    private JButton okButton, applyButton, cancelButton;
+    private Dialog ownerDialog; // 引用包含此面板的对话框
+    private boolean confirmed = false; // 跟踪用户是确认还是取消
+
+    public AdvancedColorPanel(Color initialColor, Consumer<Color> colorChangeListener) {
+        this.currentColor = initialColor != null ? initialColor : Color.BLACK;
+        this.originalColor = new Color(
+                currentColor.getRed(),
+                currentColor.getGreen(),
+                currentColor.getBlue(),
+                currentColor.getAlpha()
+        ); // 保存初始颜色的副本
+        this.lastAppliedColor = this.originalColor; // 初始时，最后应用的颜色与原始颜色相同
+        this.colorChangeListener = colorChangeListener;
+
+        setLayout(new BorderLayout(10, 10));
+        setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+
+        // 主面板（包含颜色预览和控件）
+        JPanel mainPanel = new JPanel(new BorderLayout(10, 10));
+
+        // Color preview panel on the left
+        colorPreview = new JPanel() {
+            @Override
+            protected void paintComponent(Graphics g) {
+                super.paintComponent(g);
+                // 绘制棋盘背景以显示透明度
+                int squareSize = 8;
+                for (int i = 0; i < getWidth(); i += squareSize) {
+                    for (int j = 0; j < getHeight(); j += squareSize) {
+                        if ((i / squareSize + j / squareSize) % 2 == 0) {
+                            g.setColor(Color.LIGHT_GRAY);
+                        } else {
+                            g.setColor(Color.WHITE);
+                        }
+                        g.fillRect(i, j, squareSize, squareSize);
+                    }
+                }
+
+                // 绘制当前颜色
+                g.setColor(currentColor);
+                g.fillRect(0, 0, getWidth(), getHeight());
+
+                // Draw a border
+                g.setColor(Color.GRAY);
+                g.drawRect(0, 0, getWidth() - 1, getHeight() - 1);
+            }
+        };
+        colorPreview.setPreferredSize(new Dimension(80, 80));
+        mainPanel.add(colorPreview, BorderLayout.WEST);
+
+        // Controls panel on the right
+        JPanel controlsPanel = new JPanel();
+        controlsPanel.setLayout(new BoxLayout(controlsPanel, BoxLayout.Y_AXIS));
+
+        // Hex color field
+        JPanel hexPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        hexPanel.setBorder(BorderFactory.createEmptyBorder(0, 0, 5, 0));
+
+        // 使用固定宽度的标签面板
+        JPanel hexLabelPanel = new JPanel();
+        hexLabelPanel.setLayout(new BorderLayout());
+        hexLabelPanel.setPreferredSize(new Dimension(50, 20));
+        JLabel hexLabel = new JLabel("Hex:");
+        hexLabelPanel.add(hexLabel, BorderLayout.WEST);
+        hexPanel.add(hexLabelPanel);
+
+        hexField = new JTextField(7);
+        hexField.setText(String.format("#%02X%02X%02X",
+                currentColor.getRed(), currentColor.getGreen(), currentColor.getBlue()));
+        hexField.getDocument().addDocumentListener(new HexFieldListener());
+        hexField.addFocusListener(new FocusAdapter() {
+            @Override
+            public void focusLost(FocusEvent e) {
+                updateColorFromHex();
+            }
+        });
+        hexField.addActionListener(e -> updateColorFromHex());
+        hexPanel.add(hexField);
+        controlsPanel.add(hexPanel);
+
+        // RGB sliders - 使用相同的面板和标签宽度
+        controlsPanel.add(createColorSlider("Red", redSlider = new JSlider(0, 255, currentColor.getRed()),
+                redField = new JTextField(3), Color.RED));
+        controlsPanel.add(createColorSlider("Green", greenSlider = new JSlider(0, 255, currentColor.getGreen()),
+                greenField = new JTextField(3), Color.GREEN));
+        controlsPanel.add(createColorSlider("Blue", blueSlider = new JSlider(0, 255, currentColor.getBlue()),
+                blueField = new JTextField(3), Color.BLUE));
+
+        // Alpha slider
+        controlsPanel.add(createColorSlider("Alpha", alphaSlider = new JSlider(0, 255, currentColor.getAlpha()),
+                alphaField = new JTextField(3), Color.GRAY));
+
+        mainPanel.add(controlsPanel, BorderLayout.CENTER);
+
+        // 添加按钮面板
+        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+
+        okButton = new JButton("OK");
+        okButton.addActionListener(e -> {
+            confirmed = true;
+            notifyColorChange(); // 确认时通知颜色更改
+            lastAppliedColor = new Color(
+                currentColor.getRed(),
+                currentColor.getGreen(),
+                currentColor.getBlue(),
+                currentColor.getAlpha()
+            ); // 更新最后应用的颜色
+            if (ownerDialog != null) {
+                ownerDialog.dispose();
+            }
+        });
+
+        applyButton = new JButton("Apply");
+        applyButton.addActionListener(e -> {
+            notifyColorChange(); // 应用时通知颜色更改
+            lastAppliedColor = new Color(
+                currentColor.getRed(),
+                currentColor.getGreen(),
+                currentColor.getBlue(),
+                currentColor.getAlpha()
+            ); // 更新最后应用的颜色
+            // 不关闭对话框
+        });
+
+        cancelButton = new JButton("Cancel");
+        cancelButton.addActionListener(e -> {
+            confirmed = false;
+            // 还原到原始颜色
+            currentColor = originalColor;
+            // 不通知颜色变化，直接关闭
+            if (ownerDialog != null) {
+                ownerDialog.dispose();
+            }
+        });
+
+        buttonPanel.add(okButton);
+        buttonPanel.add(applyButton);
+        buttonPanel.add(cancelButton);
+
+        // 添加主面板和按钮面板
+        add(mainPanel, BorderLayout.CENTER);
+        add(buttonPanel, BorderLayout.SOUTH);
+
+        // Initialize field values
+        updateControlsFromColor();
+    }
+
+    // 设置拥有此面板的对话框引用
+    public void setOwnerDialog(Dialog ownerDialog) {
+        this.ownerDialog = ownerDialog;
+    }
+
+    private JPanel createColorSlider(String name, JSlider slider, JTextField field, Color labelColor) {
+        JPanel panel = new JPanel();
+        panel.setLayout(new BorderLayout(5, 0));
+        panel.setBorder(BorderFactory.createEmptyBorder(3, 0, 3, 0));
+
+        // 使用固定宽度的标签面板确保对齐
+        JPanel labelPanel = new JPanel();
+        labelPanel.setLayout(new BorderLayout());
+        labelPanel.setPreferredSize(new Dimension(50, 20));
+        JLabel label = new JLabel(name);
+        label.setForeground(labelColor);
+        labelPanel.add(label, BorderLayout.WEST);
+        panel.add(labelPanel, BorderLayout.WEST);
+
+        // 滑块设置
+        slider.setPreferredSize(new Dimension(150, 20));
+        slider.addChangeListener(e -> {
+            if (!updatingControls) {
+                updatingControls = true;
+                field.setText(String.valueOf(slider.getValue()));
+                updateColorFromSliders();
+                updatingControls = false;
+            }
+        });
+        panel.add(slider, BorderLayout.CENTER);
+
+        // 文本框设置
+        field.setText(String.valueOf(slider.getValue()));
+        field.setPreferredSize(new Dimension(40, 20));
+        configureNumberField(field, 0, 255);
+        field.getDocument().addDocumentListener(new TextFieldListener(field, slider));
+        field.addActionListener(e -> updateColorFromFields());
+
+        // 把文本框放在一个固定宽度的面板中
+        JPanel fieldPanel = new JPanel(new BorderLayout());
+        fieldPanel.setPreferredSize(new Dimension(45, 20));
+        fieldPanel.add(field, BorderLayout.CENTER);
+        panel.add(fieldPanel, BorderLayout.EAST);
+
+        return panel;
+    }
+
+    private void configureNumberField(JTextField field, int min, int max) {
+        ((AbstractDocument) field.getDocument()).setDocumentFilter(new DocumentFilter() {
+            @Override
+            public void insertString(FilterBypass fb, int offset, String string, AttributeSet attr)
+                    throws BadLocationException {
+                if (string.matches("\\d*")) {
+                    super.insertString(fb, offset, string, attr);
+                }
+            }
+
+            @Override
+            public void replace(FilterBypass fb, int offset, int length, String text, AttributeSet attrs)
+                    throws BadLocationException {
+                if (text.matches("\\d*")) {
+                    super.replace(fb, offset, length, text, attrs);
+                }
+            }
+        });
+
+        field.addFocusListener(new FocusAdapter() {
+            @Override
+            public void focusLost(FocusEvent e) {
+                validateFieldValue(field, min, max);
+            }
+        });
+    }
+
+    private void validateFieldValue(JTextField field, int min, int max) {
+        try {
+            int value = Integer.parseInt(field.getText());
+            if (value < min) value = min;
+            if (value > max) value = max;
+            field.setText(String.valueOf(value));
+        } catch (NumberFormatException ex) {
+            field.setText(String.valueOf(min));
+        }
+    }
+
+    private void updateColorFromSliders() {
+        currentColor = new Color(
+                redSlider.getValue(),
+                greenSlider.getValue(),
+                blueSlider.getValue(),
+                alphaSlider.getValue()
+        );
+        hexField.setText(String.format("#%02X%02X%02X",
+                currentColor.getRed(), currentColor.getGreen(), currentColor.getBlue()));
+        colorPreview.repaint();
+
+        // 实时预览颜色，但不需要确认
+        // 我们将等待OK按钮点击后才正式通知
+    }
+
+    private void updateColorFromFields() {
+        if (!updatingControls) {
+            updatingControls = true;
+            try {
+                int r = Integer.parseInt(redField.getText());
+                int g = Integer.parseInt(greenField.getText());
+                int b = Integer.parseInt(blueField.getText());
+                int a = Integer.parseInt(alphaField.getText());
+
+                r = Math.max(0, Math.min(255, r));
+                g = Math.max(0, Math.min(255, g));
+                b = Math.max(0, Math.min(255, b));
+                a = Math.max(0, Math.min(255, a));
+
+                redSlider.setValue(r);
+                greenSlider.setValue(g);
+                blueSlider.setValue(b);
+                alphaSlider.setValue(a);
+
+                currentColor = new Color(r, g, b, a);
+                hexField.setText(String.format("#%02X%02X%02X", r, g, b));
+                colorPreview.repaint();
+
+                // 实时预览颜色，但不需要确认
+            } catch (NumberFormatException e) {
+                // Ignore invalid input
+            }
+            updatingControls = false;
+        }
+    }
+
+    private void updateColorFromHex() {
+        if (!updatingControls) {
+            updatingControls = true;
+            try {
+                String hex = hexField.getText().replace("#", "").trim();
+                if (hex.length() == 6) {
+                    int r = Integer.parseInt(hex.substring(0, 2), 16);
+                    int g = Integer.parseInt(hex.substring(2, 4), 16);
+                    int b = Integer.parseInt(hex.substring(4, 6), 16);
+                    int a = currentColor.getAlpha(); // Keep current alpha
+
+                    redSlider.setValue(r);
+                    greenSlider.setValue(g);
+                    blueSlider.setValue(b);
+
+                    redField.setText(String.valueOf(r));
+                    greenField.setText(String.valueOf(g));
+                    blueField.setText(String.valueOf(b));
+
+                    currentColor = new Color(r, g, b, a);
+                    colorPreview.repaint();
+
+                    // 实时预览颜色，但不需要确认
+                }
+            } catch (Exception e) {
+                // Restore valid hex on error
+                hexField.setText(String.format("#%02X%02X%02X",
+                        currentColor.getRed(), currentColor.getGreen(), currentColor.getBlue()));
+            }
+            updatingControls = false;
+        }
+    }
+
+    private void updateControlsFromColor() {
+        updatingControls = true;
+
+        redSlider.setValue(currentColor.getRed());
+        greenSlider.setValue(currentColor.getGreen());
+        blueSlider.setValue(currentColor.getBlue());
+        alphaSlider.setValue(currentColor.getAlpha());
+
+        redField.setText(String.valueOf(currentColor.getRed()));
+        greenField.setText(String.valueOf(currentColor.getGreen()));
+        blueField.setText(String.valueOf(currentColor.getBlue()));
+        alphaField.setText(String.valueOf(currentColor.getAlpha()));
+
+        hexField.setText(String.format("#%02X%02X%02X",
+                currentColor.getRed(), currentColor.getGreen(), currentColor.getBlue()));
+
+        colorPreview.repaint();
+        updatingControls = false;
+    }
+
+    public void setColor(Color color) {
+        if (color != null) {
+            this.currentColor = color;
+            this.originalColor = new Color(
+                    color.getRed(),
+                    color.getGreen(),
+                    color.getBlue(),
+                    color.getAlpha()
+            ); // 保存初始颜色副本
+            this.lastAppliedColor = this.originalColor; // 重置最后应用的颜色
+            updateControlsFromColor();
+        }
+    }
+
+    public Color getColor() {
+        return currentColor;
+    }
+
+    public Color getLastAppliedColor() {
+        return lastAppliedColor;
+    }
+
+    public boolean isConfirmed() {
+        return confirmed;
+    }
+
+    private void notifyColorChange() {
+        if (colorChangeListener != null) {
+            colorChangeListener.accept(currentColor);
+        }
+    }
+
+    private class TextFieldListener implements DocumentListener {
+        private JTextField field;
+        private JSlider slider;
+
+        public TextFieldListener(JTextField field, JSlider slider) {
+            this.field = field;
+            this.slider = slider;
+        }
+
+        private void update() {
+            if (!updatingControls) {
+                try {
+                    int value = Integer.parseInt(field.getText());
+                    value = Math.max(0, Math.min(255, value));
+                    slider.setValue(value);
+                    // The slider's change listener will update the color
+                } catch (NumberFormatException e) {
+                    // Ignore invalid input
+                }
+            }
+        }
+
+        @Override
+        public void insertUpdate(DocumentEvent e) {
+            update();
+        }
+
+        @Override
+        public void removeUpdate(DocumentEvent e) {
+            update();
+        }
+
+        @Override
+        public void changedUpdate(DocumentEvent e) {
+            update();
+        }
+    }
+
+    private class HexFieldListener implements DocumentListener {
+        private void update() {
+            if (!updatingControls && hexField.getText().length() == 7) {
+                updateColorFromHex();
+            }
+        }
+
+        @Override
+        public void insertUpdate(DocumentEvent e) {
+            update();
+        }
+
+        @Override
+        public void removeUpdate(DocumentEvent e) {
+            // Don't update when removing characters
+        }
+
+        @Override
+        public void changedUpdate(DocumentEvent e) {
+            update();
+        }
+    }
+}
+
+===== .\src\main\java\com\whiteboard\client\ui\ColorPanel.java =====
+package com.whiteboard.client.ui;
+
+import javax.swing.*;
+import java.awt.*;
+import java.awt.event.ActionListener;
+/**
+ * @deprecated This class is deprecated and will be removed in future releases.
+ * Use {@link ColorSelectionPanel} instead.
+ */
+@Deprecated
+public class ColorPanel extends JPanel {
+    private WhiteboardPanel whiteboardPanel;
+
+    public ColorPanel(WhiteboardPanel whiteboardPanel) {
+        this.whiteboardPanel = whiteboardPanel;
+        setLayout(new GridLayout(2, 8));
+        initializeColors();
+    }
+
+    private void initializeColors() {
+        // 基本颜色
+        addColorButton(Color.BLACK);
+        addColorButton(Color.DARK_GRAY);
+        addColorButton(Color.GRAY);
+        addColorButton(Color.LIGHT_GRAY);
+        addColorButton(Color.WHITE);
+        addColorButton(Color.RED);
+        addColorButton(Color.PINK);
+        addColorButton(Color.ORANGE);
+
+        // 更多颜色
+        addColorButton(Color.YELLOW);
+        addColorButton(Color.GREEN);
+        addColorButton(new Color(0, 128, 0)); // 深绿色
+        addColorButton(Color.CYAN);
+        addColorButton(Color.BLUE);
+        addColorButton(new Color(0, 0, 128)); // 深蓝色
+        addColorButton(Color.MAGENTA);
+        addColorButton(new Color(128, 0, 128)); // 紫色
+    }
+
+    private void addColorButton(Color color) {
+        JButton button = new JButton();
+        button.setBackground(color);
+        button.setPreferredSize(new Dimension(24, 24));
+        button.setBorder(BorderFactory.createLineBorder(Color.BLACK));
+
+        button.addActionListener(e -> whiteboardPanel.setCurrentColor(color));
+
+        add(button);
+    }
+}
+
+===== .\src\main\java\com\whiteboard\client\ui\ColorSelectionPanel.java =====
+package com.whiteboard.client.ui;
+
+import javax.swing.*;
+import java.awt.*;
+import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener;
+import java.util.function.Consumer;
+
+public class ColorSelectionPanel extends JPanel {
+    private Color currentColor = Color.BLACK;
+    private int currentAlpha = 255; // 默认透明度为100%
+    private JPanel colorPreviewCircle;
+    private JLabel hexLabel;
+    private JButton blackButton, redButton, advancedButton;
+    private JSlider alphaSlider;
+    private JTextField alphaField;
+    private Consumer<Color> colorChangeListener;
+    private JDialog advancedDialog;
+    private AdvancedColorPanel advancedColorPanel;
+
+    public ColorSelectionPanel(Color initialColor, Consumer<Color> colorChangeListener) {
+        this.currentColor = initialColor != null ? initialColor : Color.BLACK;
+        this.currentAlpha = this.currentColor.getAlpha();
+        this.colorChangeListener = colorChangeListener;
+
+        setLayout(new BorderLayout(5, 0));
+
+        // 创建颜色预览圆和Hex标签
+        JPanel previewPanel = new JPanel(new BorderLayout());
+        previewPanel.setPreferredSize(new Dimension(80, 60));
+
+        colorPreviewCircle = new JPanel() {
+            @Override
+            protected void paintComponent(Graphics g) {
+                super.paintComponent(g);
+                Graphics2D g2 = (Graphics2D) g;
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+
+                int size = Math.min(getWidth(), getHeight()) - 4;
+                int x = (getWidth() - size) / 2;
+                int y = (getHeight() - size) / 2;
+
+                // 画透明背景（棋盘格）
+                g2.setColor(Color.LIGHT_GRAY);
+                g2.fillOval(x, y, size, size);
+                g2.setColor(Color.WHITE);
+                for (int i = 0; i < size; i += 8) {
+                    for (int j = i % 16; j < size; j += 16) {
+                        g2.fillRect(x + i, y + j, 8, 8);
+                    }
+                }
+
+                // 画当前颜色
+                g2.setColor(currentColor);
+                g2.fillOval(x, y, size, size);
+
+                // 画边框
+                g2.setColor(Color.DARK_GRAY);
+                g2.setStroke(new BasicStroke(1.5f));
+                g2.drawOval(x, y, size, size);
+            }
+        };
+        colorPreviewCircle.setPreferredSize(new Dimension(50, 50));
+        previewPanel.add(colorPreviewCircle, BorderLayout.CENTER);
+
+        hexLabel = new JLabel(String.format("#%02X%02X%02X",
+                currentColor.getRed(), currentColor.getGreen(), currentColor.getBlue()));
+        hexLabel.setHorizontalAlignment(SwingConstants.CENTER);
+        previewPanel.add(hexLabel, BorderLayout.SOUTH);
+
+        add(previewPanel, BorderLayout.WEST);
+
+        // 创建按钮和滑块面板
+        JPanel controlsPanel = new JPanel(new BorderLayout(5, 0));
+
+        JPanel buttonsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 0));
+        blackButton = createColorButton(Color.BLACK);
+        redButton = createColorButton(Color.RED);
+        advancedButton = new JButton("...");
+        advancedButton.addActionListener(e -> showAdvancedColorDialog());
+
+        buttonsPanel.add(blackButton);
+        buttonsPanel.add(redButton);
+        buttonsPanel.add(advancedButton);
+
+        controlsPanel.add(buttonsPanel, BorderLayout.WEST);
+
+        // 透明度滑块和输入框
+        JPanel alphaPanel = new JPanel(new BorderLayout(5, 0));
+        alphaPanel.add(new JLabel("Alpha:"), BorderLayout.WEST);
+
+        alphaSlider = new JSlider(1, 100, currentAlpha * 100 / 255);
+        alphaSlider.addChangeListener(e -> {
+            currentAlpha = alphaSlider.getValue() * 255 / 100;
+            alphaField.setText(alphaSlider.getValue() + "%");
+            updateColorWithAlpha();
+        });
+        alphaPanel.add(alphaSlider, BorderLayout.CENTER);
+
+        alphaField = new JTextField(4);
+        alphaField.setText(alphaSlider.getValue() + "%");
+        alphaField.addActionListener(e -> {
+            try {
+                String text = alphaField.getText().replace("%", "").trim();
+                int value = Integer.parseInt(text);
+                value = Math.max(1, Math.min(100, value));
+                alphaSlider.setValue(value);
+                // 滑块的changeListener会更新颜色
+            } catch (NumberFormatException ex) {
+                alphaField.setText(alphaSlider.getValue() + "%");
+            }
+        });
+        alphaPanel.add(alphaField, BorderLayout.EAST);
+
+        controlsPanel.add(alphaPanel, BorderLayout.CENTER);
+
+        add(controlsPanel, BorderLayout.CENTER);
+    }
+
+    private JButton createColorButton(Color color) {
+        JButton button = new JButton() {
+            @Override
+            protected void paintComponent(Graphics g) {
+                super.paintComponent(g);
+                g.setColor(color);
+                g.fillRect(3, 3, getWidth() - 6, getHeight() - 6);
+            }
+        };
+        button.setPreferredSize(new Dimension(24, 24));
+        button.addActionListener(e -> {
+            setBaseColor(color);
+        });
+        return button;
+    }
+
+    private void showAdvancedColorDialog() {
+        try {
+            Window parent = SwingUtilities.getWindowAncestor(this);
+
+            if (advancedDialog == null) {
+                // 创建对话框
+                advancedDialog = new JDialog(
+                        (parent instanceof Frame) ? (Frame) parent : null,
+                        "Advanced Color Selector",
+                        Dialog.ModalityType.APPLICATION_MODAL);
+
+                // 创建高级颜色面板
+                advancedColorPanel = new AdvancedColorPanel(currentColor, color -> {
+                    // 这个回调会在用户点击"Apply"或"OK"按钮时被调用
+                    // 在此更新主面板的颜色
+                    setColor(color);
+
+                    // 通知监听器
+                    if (colorChangeListener != null) {
+                        colorChangeListener.accept(color);
+                    }
+                });
+
+                // 设置对话框引用
+                advancedColorPanel.setOwnerDialog(advancedDialog);
+
+                // 添加面板到对话框
+                advancedDialog.add(advancedColorPanel);
+                advancedDialog.pack();
+                advancedDialog.setLocationRelativeTo(parent);
+                advancedDialog.setResizable(false);
+            } else {
+                // 对话框已存在，更新高级面板的初始颜色
+                advancedColorPanel.setColor(currentColor);
+            }
+
+            // 显示对话框
+            advancedDialog.setVisible(true);
+
+            // 对话框关闭后
+            // 不需要在这里处理颜色更新，因为"Apply"和"OK"按钮会
+            // 通过回调函数处理颜色更新
+
+        } catch (Exception e) {
+            // 处理任何可能的异常
+            e.printStackTrace();
+            JOptionPane.showMessageDialog(this,
+                    "Error opening color selector: " + e.getMessage(),
+                    "Error",
+                    JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    /**
+     * 设置基础颜色（保持当前Alpha值）
+     */
+    private void setBaseColor(Color color) {
+        // 保持当前的透明度
+        this.currentColor = new Color(
+                color.getRed(),
+                color.getGreen(),
+                color.getBlue(),
+                currentAlpha
+        );
+
+        // 更新UI
+        hexLabel.setText(String.format("#%02X%02X%02X",
+                currentColor.getRed(), currentColor.getGreen(), currentColor.getBlue()));
+        colorPreviewCircle.repaint();
+
+        // 通知颜色变化
+        notifyColorChange();
+    }
+
+    /**
+     * 更新带Alpha值的颜色
+     */
+    private void updateColorWithAlpha() {
+        this.currentColor = new Color(
+                currentColor.getRed(),
+                currentColor.getGreen(),
+                currentColor.getBlue(),
+                currentAlpha
+        );
+        colorPreviewCircle.repaint();
+        notifyColorChange();
+    }
+
+    /**
+     * 设置颜色
+     * 此方法用于从外部设置颜色，如从高级面板
+     */
+    public void setColor(Color color) {
+        if (color != null) {
+            this.currentColor = color;
+            this.currentAlpha = color.getAlpha();
+
+            // 更新UI组件
+            hexLabel.setText(String.format("#%02X%02X%02X",
+                    color.getRed(), color.getGreen(), color.getBlue()));
+
+            int alphaPercent = currentAlpha * 100 / 255;
+            alphaSlider.setValue(alphaPercent);
+            alphaField.setText(alphaPercent + "%");
+
+            colorPreviewCircle.repaint();
+        }
+    }
+
+    public Color getColor() {
+        return currentColor;
+    }
+
+    private void notifyColorChange() {
+        if (colorChangeListener != null) {
+            colorChangeListener.accept(currentColor);
+        }
+    }
+}
+
+===== .\src\main\java\com\whiteboard\client\ui\ToolPanel.java =====
+package com.whiteboard.client.ui;
+
+import com.whiteboard.client.tools.*;
+import javax.swing.*;
+import javax.swing.event.ChangeEvent;
+import javax.swing.event.ChangeListener;
+import java.awt.*;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener;
+import java.awt.event.FocusAdapter;
+import java.awt.event.FocusEvent;
+
+public class ToolPanel extends JToolBar {
+    private WhiteboardPanel whiteboardPanel;
+    private JSlider strokeWidthSlider;
+    private JTextField strokeWidthField;
+    private JPanel strokePreviewPanel; // 用于显示线宽预览
+
+    public ToolPanel(WhiteboardPanel whiteboardPanel) {
+        this.whiteboardPanel = whiteboardPanel;
+        setFloatable(false);
+        initializeTools();
+    }
+
+    private void initializeTools() {
+        // 铅笔工具按钮
+        JButton pencilButton = new JButton("Pencil");
+        pencilButton.addActionListener(e ->
+                whiteboardPanel.setCurrentTool(new PencilTool(Color.BLACK, getCurrentStrokeWidth())));
+        add(pencilButton);
+
+        // 线条按钮
+        JButton lineButton = new JButton("Line");
+        lineButton.addActionListener(e ->
+                whiteboardPanel.setCurrentTool(new LineTool(Color.BLACK, getCurrentStrokeWidth())));
+        add(lineButton);
+
+        // 矩形按钮
+        JButton rectButton = new JButton("Rectangle");
+        rectButton.addActionListener(e ->
+                whiteboardPanel.setCurrentTool(new RectangleTool(Color.BLACK, getCurrentStrokeWidth())));
+        add(rectButton);
+
+        // 椭圆按钮
+        JButton ovalButton = new JButton("Oval");
+        ovalButton.addActionListener(e ->
+                whiteboardPanel.setCurrentTool(new OvalTool(Color.BLACK, getCurrentStrokeWidth())));
+        add(ovalButton);
+
+        // 三角形按钮
+        JButton triangleButton = new JButton("Triangle");
+        triangleButton.addActionListener(e ->
+                whiteboardPanel.setCurrentTool(new TriangleTool(Color.BLACK, getCurrentStrokeWidth())));
+        add(triangleButton);
+
+        // 文本按钮
+        JButton textButton = new JButton("Text");
+        textButton.addActionListener(e ->
+                whiteboardPanel.setCurrentTool(new TextTool(Color.BLACK,
+                        new Font("Arial", Font.PLAIN, getCurrentFontSize()))));
+        add(textButton);
+
+        // 橡皮擦按钮
+        setupEraserButton();
+
+        // 清除按钮
+        JButton clearButton = new JButton("Clear All");
+        clearButton.addActionListener(e -> whiteboardPanel.clearCanvas());
+        add(clearButton);
+
+        // 添加分隔符
+        addSeparator();
+
+        // 线宽控制
+        setupStrokeWidthControl();
+    }
+
+    private void setupStrokeWidthControl() {
+        JPanel strokePanel = new JPanel(new BorderLayout(5, 0));
+        strokePanel.add(new JLabel("Brush Size:"), BorderLayout.WEST);
+
+        // 线宽滑块
+        strokeWidthSlider = new JSlider(JSlider.HORIZONTAL, 1, 20, 2);
+        strokeWidthSlider.setPreferredSize(new Dimension(100, 20));
+        strokeWidthSlider.setMajorTickSpacing(5);
+        strokeWidthSlider.setMinorTickSpacing(1);
+        strokeWidthSlider.setPaintTicks(true);
+
+        // 线宽文本输入框
+        strokeWidthField = new JTextField(2);
+        strokeWidthField.setText(String.valueOf(strokeWidthSlider.getValue()));
+        strokeWidthField.setHorizontalAlignment(SwingConstants.CENTER);
+
+        // 线宽预览面板
+        strokePreviewPanel = new JPanel() {
+            @Override
+            protected void paintComponent(Graphics g) {
+                super.paintComponent(g);
+                Graphics2D g2d = (Graphics2D) g;
+
+                // 设置抗锯齿
+                g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
+                        RenderingHints.VALUE_ANTIALIAS_ON);
+
+                // 获取当前线宽和颜色
+                int width = getCurrentStrokeWidth();
+                Color color = whiteboardPanel.getCurrentColor();
+
+                // 绘制预览圆形
+                g2d.setColor(color);
+
+                // 根据笔刷大小计算圆形直径
+                int diameter = width*2;
+
+                // 居中绘制
+                int Brush_x = (getWidth() - diameter) / 2;
+                int Brush_y = (getHeight() - diameter) / 2;
+
+                g2d.fillOval(Brush_x, Brush_y, diameter, diameter);
+            }
+        };
+        strokePreviewPanel.setPreferredSize(new Dimension(40, 40));
+        strokePreviewPanel.setBorder(BorderFactory.createLineBorder(Color.LIGHT_GRAY));
+
+        // 线宽滑块事件监听
+        strokeWidthSlider.addChangeListener(new ChangeListener() {
+            @Override
+            public void stateChanged(ChangeEvent e) {
+                int width = strokeWidthSlider.getValue();
+                strokeWidthField.setText(String.valueOf(width));
+                updateStrokeWidth(width);
+                strokePreviewPanel.repaint();
+            }
+        });
+
+        // 线宽文本框事件监听
+        strokeWidthField.addActionListener(new ActionListener() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                processStrokeWidthInput();
+            }
+        });
+
+        strokeWidthField.addFocusListener(new FocusAdapter() {
+            @Override
+            public void focusLost(FocusEvent e) {
+                processStrokeWidthInput();
+            }
+        });
+
+        JPanel rightPanel = new JPanel(new BorderLayout(5, 0));
+        rightPanel.add(strokeWidthField, BorderLayout.CENTER);
+        rightPanel.add(strokePreviewPanel, BorderLayout.EAST);
+
+        strokePanel.add(strokeWidthSlider, BorderLayout.CENTER);
+        strokePanel.add(rightPanel, BorderLayout.EAST);
+
+        add(strokePanel);
+    }
+
+    private void processStrokeWidthInput() {
+        try {
+            // 尝试解析输入值
+            String input = strokeWidthField.getText().trim();
+
+            // 检查是否包含小数点
+            double doubleValue = Double.parseDouble(input);
+
+            // 四舍五入到整数
+            int width = (int) Math.round(doubleValue);
+
+            // 确保值大于0
+            width = Math.max(1, width);
+
+            // 确保不超过滑块最大值
+            width = Math.min(width, strokeWidthSlider.getMaximum());
+
+            // 更新滑块和字段
+            strokeWidthSlider.setValue(width);
+            strokeWidthField.setText(String.valueOf(width));
+
+            // 更新工具
+            updateStrokeWidth(width);
+
+            // 更新预览
+            strokePreviewPanel.repaint();
+        } catch (NumberFormatException ex) {
+            // 如果输入无效，恢复为当前滑块值
+            strokeWidthField.setText(String.valueOf(strokeWidthSlider.getValue()));
+        }
+    }
+
+    private void updateStrokeWidth(int width) {
+        whiteboardPanel.setCurrentStrokeWidth(width);
+
+        // 如果当前工具已存在，更新其线宽
+        if (whiteboardPanel.getCurrentTool() != null &&
+                !(whiteboardPanel.getCurrentTool() instanceof TextTool)) {
+            // 当前工具的类型
+            DrawingTool currentTool = whiteboardPanel.getCurrentTool();
+
+            // 基于当前工具类型创建新工具，保持颜色但更新线宽
+            if (currentTool instanceof PencilTool) {
+                whiteboardPanel.setCurrentTool(
+                        new PencilTool(whiteboardPanel.getCurrentColor(), width));
+            } else if (currentTool instanceof LineTool) {
+                whiteboardPanel.setCurrentTool(
+                        new LineTool(whiteboardPanel.getCurrentColor(), width));
+            } else if (currentTool instanceof RectangleTool) {
+                whiteboardPanel.setCurrentTool(
+                        new RectangleTool(whiteboardPanel.getCurrentColor(), width));
+            } else if (currentTool instanceof OvalTool) {
+                whiteboardPanel.setCurrentTool(
+                        new OvalTool(whiteboardPanel.getCurrentColor(), width));
+            } else if (currentTool instanceof TriangleTool) {
+                whiteboardPanel.setCurrentTool(
+                        new TriangleTool(whiteboardPanel.getCurrentColor(), width));
+            } else if (currentTool instanceof EraserTool) {
+                // 更新橡皮擦大小，保持当前模式
+                EraserTool oldEraserTool = (EraserTool) currentTool;
+                EraserTool newEraserTool = new EraserTool(Math.toIntExact(Math.round(width * 1.25))); // 橡皮擦尺寸为线宽的1.25倍
+                // 设置橡皮擦模式
+                newEraserTool.setMode(oldEraserTool.getMode());
+                whiteboardPanel.setCurrentTool(newEraserTool);
+                // 如果当前点存在，保留它
+                if (oldEraserTool.getCurrentPoint() != null) {
+                    newEraserTool.setCurrentPoint(oldEraserTool.getCurrentPoint());
+                }
+            }
+        }
+        // 更新预览
+        strokePreviewPanel.repaint();
+    }
+
+    // 在ToolPanel类中添加橡皮擦控制
+    private void setupEraserButton() {
+        JButton eraserButton = new JButton("Eraser");
+
+        // 创建橡皮擦选项面板
+        JPopupMenu eraserMenu = new JPopupMenu();
+        JPanel eraserPanel = new JPanel(new BorderLayout(5, 5));
+        eraserPanel.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
+
+        // 橡皮擦模式单选按钮
+        JPanel modePanel = new JPanel(new GridLayout(2, 1, 0, 5));
+        modePanel.setBorder(BorderFactory.createTitledBorder("Eraser Mode"));
+
+        ButtonGroup modeGroup = new ButtonGroup();
+        JRadioButton objectModeButton = new JRadioButton(EraserTool.EraseMode.OBJECT.getDisplayName());
+        JRadioButton freeModeButton = new JRadioButton(EraserTool.EraseMode.FREE.getDisplayName());
+
+        // 禁用对象擦除模式按钮
+        objectModeButton.setEnabled(false);
+
+        freeModeButton.setSelected(true); // 默认选中自由擦除模式
+
+        modeGroup.add(objectModeButton);
+        modeGroup.add(freeModeButton);
+
+        modePanel.add(objectModeButton);
+        modePanel.add(freeModeButton);
+
+        // 应用按钮
+        JButton applyButton = new JButton("Apply");
+
+        // 事件监听
+        applyButton.addActionListener(new ActionListener() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                // 创建橡皮擦并设置模式
+                createEraserWithCurrentSettings(
+                        objectModeButton.isSelected() ?
+                                EraserTool.EraseMode.OBJECT : EraserTool.EraseMode.FREE);
+
+                // 关闭菜单
+                eraserMenu.setVisible(false);
+            }
+        });
+
+        // 组装面板
+        eraserPanel.add(modePanel, BorderLayout.CENTER);
+        eraserPanel.add(applyButton, BorderLayout.SOUTH);
+
+        eraserMenu.add(eraserPanel);
+
+        // 左键点击 - 快速使用默认模式橡皮擦
+        eraserButton.addActionListener(new ActionListener() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                // 使用对象擦除模式
+                createEraserWithCurrentSettings(EraserTool.EraseMode.FREE);
+            }
+        });
+
+        // 右键点击 - 显示模式选择菜单
+        eraserButton.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                if (e.isPopupTrigger() || e.getButton() == MouseEvent.BUTTON3) {
+                    eraserMenu.show(eraserButton, e.getX(), e.getY());
+                }
+            }
+
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                if (e.isPopupTrigger() || e.getButton() == MouseEvent.BUTTON3) {
+                    eraserMenu.show(eraserButton, e.getX(), e.getY());
+                }
+            }
+        });
+
+        add(eraserButton);
+    }
+
+    // 辅助方法：使用当前笔刷大小创建橡皮擦
+    private void createEraserWithCurrentSettings(EraserTool.EraseMode mode) {
+        int currentSize = getCurrentStrokeWidth();
+        int eraserSize = (int) Math.round(currentSize * 1.25); // 橡皮擦尺寸为笔刷大小的1.25倍
+        EraserTool eraserTool = new EraserTool(eraserSize);
+        eraserTool.setMode(mode);
+        whiteboardPanel.setCurrentTool(eraserTool);
+    }
+
+
+    public int getCurrentStrokeWidth() {
+        return strokeWidthSlider.getValue();
+    }
+
+    public int getCurrentFontSize() {
+        // 不再使用文本字段，直接返回默认字体大小
+        return 14; // 默认值
+    }
+
+    public void updatePreview() {
+        if (strokePreviewPanel != null) {
+            strokePreviewPanel.repaint();
+        }
+    }
+}
+
+===== .\src\main\java\com\whiteboard\client\ui\UIConstants.java =====
+package com.whiteboard.client.ui;
+
+public class UIConstants {
+    // Tool names
+    public static final String TOOL_PENCIL = "Pencil";
+    public static final String TOOL_LINE = "Line";
+    public static final String TOOL_RECTANGLE = "Rectangle";
+    public static final String TOOL_OVAL = "Oval";
+    public static final String TOOL_TRIANGLE = "Triangle";
+    public static final String TOOL_TEXT = "Text";
+    public static final String TOOL_ERASER = "Eraser";
+
+    // Color panel
+    public static final String COLOR_ADVANCED = "Advanced Color";
+    public static final String COLOR_RED = "Red";
+    public static final String COLOR_GREEN = "Green";
+    public static final String COLOR_BLUE = "Blue";
+    public static final String COLOR_ALPHA = "Alpha";
+    public static final String COLOR_HEX = "Hex";
+
+    // Dialogs
+    public static final String DIALOG_TITLE_COLOR = "Color Selection";
+    public static final String DIALOG_TITLE_TEXT = "Enter Text";
+
+    // Buttons
+    public static final String BUTTON_OK = "OK";
+    public static final String BUTTON_CANCEL = "Cancel";
+    public static final String BUTTON_APPLY = "Apply";
+
+    // Error messages
+    public static final String ERROR_INVALID_COLOR = "Invalid color format";
+    public static final String ERROR_INVALID_NUMBER = "Invalid number";
+
+    // Other labels
+    public static final String LABEL_BRUSH_SIZE = "Brush Size";
+    public static final String LABEL_ERASER_SIZE = "Eraser Size";
+    public static final String LABEL_PREVIEW = "Preview";
+}
+
+===== .\src\main\java\com\whiteboard\client\ui\WhiteboardFrame.java =====
+package com.whiteboard.client.ui;
+
+import javax.swing.*;
+import java.awt.*;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
+import java.util.List;
+import com.whiteboard.client.WhiteboardClient;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Timer;
+import java.util.TimerTask;
+
+public class WhiteboardFrame extends JFrame {
+    private WhiteboardPanel whiteboardPanel;
+    private ToolPanel toolPanel;
+    private ColorPanel colorPanel;
+    private boolean isManager = false;
+
+    private WhiteboardClient client;
+
+    // 聊天相关组件
+    private JList<String> userList;
+    private DefaultListModel<String> userListModel;
+    private JTextArea chatArea;
+    private JTextField chatInput;
+
+    // 新添加的颜色选择器
+    private ColorSelectionPanel colorSelectionPanel; // 新添加
+    private boolean useNewColorSelector = true; // 控制开关
+    private Map<String, JDialog> pendingUserDialogs = new HashMap<>();
+
+    public WhiteboardFrame(String title, boolean isManager, WhiteboardClient client) {
+        super(title);
+        this.isManager = isManager;
+        this.client = client;
+        initComponents();
+        setupUI();
+        setupWindowListener();
+    }
+
+    // 构造函数重载
+    public WhiteboardFrame(String title, boolean isManager) {
+        this(title, isManager, null);
+    }
+
+    private void initComponents() {
+        whiteboardPanel = new WhiteboardPanel();
+        toolPanel = new ToolPanel(whiteboardPanel);
+        // 条件创建颜色选择器
+        if (useNewColorSelector) {
+            colorSelectionPanel = new ColorSelectionPanel(Color.BLACK, color -> {
+                whiteboardPanel.setCurrentColor(color);
+            });
+        } else {
+            colorPanel = new ColorPanel(whiteboardPanel);
+        }
+
+        whiteboardPanel.setToolPanel(toolPanel);
+    }
+
+    private void setupWindowListener() {
+        addWindowListener(new WindowAdapter() {
+            @Override
+            public void windowClosing(WindowEvent e) {
+                handleWindowClosing();
+            }
+        });
+    }
+
+    private void handleWindowClosing() {
+        int response = JOptionPane.showConfirmDialog(
+                this,
+                "Are you sure you want to exit?",
+                "Exit Confirmation",
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.QUESTION_MESSAGE
+        );
+
+        if (response == JOptionPane.YES_OPTION) {
+            // 断开连接
+            if (client != null) {
+                try {
+                    client.disconnect();
+                } catch (Exception e) {
+                    System.err.println("Error disconnecting: " + e.getMessage());
+                    e.printStackTrace();
+                }
+            }
+
+            dispose();
+            System.exit(0);
+        }
+    }
+
+    /**
+     * 初始化用户列表面板
+     */
+    private JPanel createUserListPanel() {
+        JPanel panel = new JPanel(new BorderLayout());
+        panel.setBorder(BorderFactory.createTitledBorder("Online Users"));
+
+        userListModel = new DefaultListModel<>();
+        userList = new JList<>(userListModel);
+        userList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+
+        // 如果是管理员，添加右键菜单以踢出用户
+        if (isManager) {
+            JPopupMenu popupMenu = new JPopupMenu();
+            JMenuItem kickMenuItem = new JMenuItem("Kick User");
+            kickMenuItem.addActionListener(e -> {
+                String selectedUser = userList.getSelectedValue();
+                if (selectedUser != null) {
+                    kickUser(selectedUser);
+                }
+            });
+            popupMenu.add(kickMenuItem);
+
+            userList.setComponentPopupMenu(popupMenu);
+        }
+
+        JScrollPane scrollPane = new JScrollPane(userList);
+        scrollPane.setPreferredSize(new Dimension(150, 200));
+        panel.add(scrollPane, BorderLayout.CENTER);
+
+        return panel;
+    }
+
+    /**
+     * 初始化聊天面板
+     */
+    private JPanel createChatPanel() {
+        JPanel panel = new JPanel(new BorderLayout());
+        panel.setBorder(BorderFactory.createTitledBorder("Chat"));
+
+        chatArea = new JTextArea();
+        chatArea.setEditable(false);
+        chatArea.setLineWrap(true);
+        chatArea.setWrapStyleWord(true);
+
+        JScrollPane chatScrollPane = new JScrollPane(chatArea);
+        chatScrollPane.setPreferredSize(new Dimension(150, 200));
+        panel.add(chatScrollPane, BorderLayout.CENTER);
+
+        // 输入区域
+        JPanel inputPanel = new JPanel(new BorderLayout());
+        chatInput = new JTextField();
+        chatInput.addActionListener(e -> {
+            sendChatMessage();
+        });
+
+        JButton sendButton = new JButton("Send");
+        sendButton.addActionListener(e -> {
+            sendChatMessage();
+        });
+
+        inputPanel.add(chatInput, BorderLayout.CENTER);
+        inputPanel.add(sendButton, BorderLayout.EAST);
+        panel.add(inputPanel, BorderLayout.SOUTH);
+
+        return panel;
+    }
+
+    /**
+     * 发送聊天消息
+     */
+    private void sendChatMessage() {
+        String message = chatInput.getText().trim();
+        if (!message.isEmpty()) {
+            // 使用客户端发送消息
+            if (client != null) {
+                try {
+                    client.sendChatMessage(message);
+                } catch (Exception e) {
+                    System.err.println("Error sending chat message: " + e.getMessage());
+                    e.printStackTrace();
+                }
+            } else {
+                // 如果没有客户端（本地模式），直接显示
+                addChatMessage("Me", message);
+            }
+
+            // 清空输入
+            chatInput.setText("");
+        }
+    }
+
+    /**
+     * 添加聊天消息到聊天区域
+     */
+    public void addChatMessage(String sender, String message) {
+        SwingUtilities.invokeLater(() -> {
+            chatArea.append(sender + ": " + message + "\n");
+            // 滚动到底部
+            chatArea.setCaretPosition(chatArea.getDocument().getLength());
+        });
+    }
+
+    /**
+     * 更新用户列表
+     */
+    public void updateUserList(List<String> users) {
+        SwingUtilities.invokeLater(() -> {
+            userListModel.clear();
+            for (String username : users) {
+                userListModel.addElement(username);
+            }
+        });
+    }
+
+    /**
+     * 踢出用户（仅管理员）
+     */
+    private void kickUser(String username) {
+        if (client != null && isManager) {
+            try {
+                if (client.kickUser(username)) {
+                    JOptionPane.showMessageDialog(this,
+                            "User '" + username + "' has been kicked.",
+                            "User Kicked",
+                            JOptionPane.INFORMATION_MESSAGE);
+                } else {
+                    JOptionPane.showMessageDialog(this,
+                            "Failed to kick user '" + username + "'.",
+                            "Kick Failed",
+                            JOptionPane.WARNING_MESSAGE);
+                }
+            } catch (Exception e) {
+                System.err.println("Error kicking user: " + e.getMessage());
+                e.printStackTrace();
+                JOptionPane.showMessageDialog(this,
+                        "Error kicking user: " + e.getMessage(),
+                        "Error",
+                        JOptionPane.ERROR_MESSAGE);
+            }
+        } else {
+            JOptionPane.showMessageDialog(this,
+                    "Kick functionality not available in local mode or you're not a manager.",
+                    "Not Available",
+                    JOptionPane.INFORMATION_MESSAGE);
+        }
+    }
+
+    // 修改setupUI方法以添加用户列表和聊天区域
+    private void setupUI() {
+        setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
+        setSize(1200, 800);
+        setLayout(new BorderLayout());
+
+        // 添加工具栏
+        add(toolPanel, BorderLayout.NORTH);
+
+        // 添加颜色选择器
+        if (useNewColorSelector) {
+            add(colorSelectionPanel, BorderLayout.SOUTH);
+        } else {
+            add(colorPanel, BorderLayout.SOUTH);
+        }
+
+        // 创建中心面板，包含画布
+        JPanel centerPanel = new JPanel(new BorderLayout());
+        JScrollPane scrollPane = new JScrollPane(whiteboardPanel);
+        centerPanel.add(scrollPane, BorderLayout.CENTER);
+
+        // 创建侧边栏，包含用户列表和聊天
+        JPanel sidePanel = new JPanel(new BorderLayout());
+        sidePanel.add(createUserListPanel(), BorderLayout.NORTH);
+        sidePanel.add(createChatPanel(), BorderLayout.CENTER);
+
+        // 添加分割面板
+        JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, centerPanel, sidePanel);
+        splitPane.setResizeWeight(0.8); // 画布占比
+        splitPane.setOneTouchExpandable(true);
+        add(splitPane, BorderLayout.CENTER);
+
+        // 如果是管理员，添加文件菜单
+        if (isManager) {
+            setupFileMenu();
+        }
+
+        // 使窗口居中显示
+        setLocationRelativeTo(null);
+    }
+
+    /**
+     * 设置文件菜单（仅管理员）
+     */
+    private void setupFileMenu() {
+        JMenuBar menuBar = new JMenuBar();
+        JMenu fileMenu = new JMenu("File");
+
+        JMenuItem newItem = new JMenuItem("New");
+        newItem.addActionListener(e -> newWhiteboard());
+
+        JMenuItem openItem = new JMenuItem("Open");
+        openItem.addActionListener(e -> openWhiteboard());
+
+        JMenuItem saveItem = new JMenuItem("Save");
+        saveItem.addActionListener(e -> saveWhiteboard());
+
+        JMenuItem saveAsItem = new JMenuItem("Save As");
+        saveAsItem.addActionListener(e -> saveWhiteboardAs());
+
+        JMenuItem closeItem = new JMenuItem("Close");
+        closeItem.addActionListener(e -> closeApplication());
+
+        fileMenu.add(newItem);
+        fileMenu.add(openItem);
+        fileMenu.addSeparator();
+        fileMenu.add(saveItem);
+        fileMenu.add(saveAsItem);
+        fileMenu.addSeparator();
+        fileMenu.add(closeItem);
+
+        menuBar.add(fileMenu);
+        setJMenuBar(menuBar);
+    }
+
+    // 文件菜单功能（暂时只是占位方法）
+    private void newWhiteboard() {
+        // TODO: 实现新建白板功能
+        JOptionPane.showMessageDialog(this, "New whiteboard functionality not implemented yet.");
+    }
+
+    private void openWhiteboard() {
+        // TODO: 实现打开白板功能
+        JOptionPane.showMessageDialog(this, "Open whiteboard functionality not implemented yet.");
+    }
+
+    private void saveWhiteboard() {
+        // TODO: 实现保存白板功能
+        JOptionPane.showMessageDialog(this, "Save whiteboard functionality not implemented yet.");
+    }
+
+    private void saveWhiteboardAs() {
+        // TODO: 实现另存为功能
+        JOptionPane.showMessageDialog(this, "Save As functionality not implemented yet.");
+    }
+
+    private void closeApplication() {
+        int response = JOptionPane.showConfirmDialog(this,
+                "Are you sure you want to exit?",
+                "Exit Confirmation",
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.QUESTION_MESSAGE);
+        if (response == JOptionPane.YES_OPTION) {
+            dispose();
+            System.exit(0);
+        }
+    }
+
+    public WhiteboardPanel getWhiteboardPanel() {
+        return whiteboardPanel;
+    }
+
+    /**
+     * 显示用户加入请求对话框
+     */
+    public void showJoinRequest(String username, boolean isOnline) {
+        SwingUtilities.invokeLater(() -> {
+            // 检查是否已有该用户的对话框
+            JDialog existingDialog = pendingUserDialogs.get(username);
+            if (existingDialog != null && existingDialog.isVisible()) {
+                // 更新现有对话框状态
+                updateJoinRequestDialog(existingDialog, username, isOnline);
+                return;
+            }
+
+            // 创建新的对话框
+            JDialog dialog = new JDialog(this, "Join Request", false);
+            pendingUserDialogs.put(username, dialog);
+
+            JPanel panel = new JPanel(new BorderLayout(10, 10));
+            panel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+
+            JLabel messageLabel = new JLabel("User '" + username + "' wants to join.");
+            JLabel statusLabel = new JLabel("Status: " + (isOnline ? "waiting" : "disconnected"));
+
+            JPanel buttonsPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+            JButton approveButton = new JButton("Approve");
+            JButton rejectButton = new JButton("Reject");
+
+            approveButton.addActionListener(e -> {
+                if (client != null) {
+                    if (client.approveUser(username)) {
+                        JOptionPane.showMessageDialog(this,
+                                "User '" + username + "' has been approved.",
+                                "User Approved",
+                                JOptionPane.INFORMATION_MESSAGE);
+                    } else {
+                        JOptionPane.showMessageDialog(this,
+                                "Failed to approve user '" + username + "'.",
+                                "Approval Failed",
+                                JOptionPane.WARNING_MESSAGE);
+                    }
+                }
+                dialog.dispose();
+                pendingUserDialogs.remove(username);
+            });
+
+            rejectButton.addActionListener(e -> {
+                if (client != null) {
+                    if (client.rejectUser(username)) {
+                        JOptionPane.showMessageDialog(this,
+                                "User '" + username + "' has been rejected.",
+                                "User Rejected",
+                                JOptionPane.INFORMATION_MESSAGE);
+                    } else {
+                        JOptionPane.showMessageDialog(this,
+                                "Failed to reject user '" + username + "'.",
+                                "Rejection Failed",
+                                JOptionPane.WARNING_MESSAGE);
+                    }
+                }
+                dialog.dispose();
+                pendingUserDialogs.remove(username);
+            });
+
+            buttonsPanel.add(approveButton);
+            buttonsPanel.add(rejectButton);
+
+            JPanel infoPanel = new JPanel(new GridLayout(2, 1, 5, 5));
+            infoPanel.add(messageLabel);
+            infoPanel.add(statusLabel);
+
+            panel.add(infoPanel, BorderLayout.CENTER);
+            panel.add(buttonsPanel, BorderLayout.SOUTH);
+
+            dialog.add(panel);
+            dialog.pack();
+            dialog.setLocationRelativeTo(this);
+            dialog.setVisible(true);
+
+            // 如果用户已断开连接，添加自动关闭计时器
+            if (!isOnline) {
+                startAutoCloseTimer(dialog, statusLabel, username);
+            }
+        });
+    }
+
+    /**
+     * 更新加入请求对话框状态
+     */
+    private void updateJoinRequestDialog(JDialog dialog, String username, boolean isOnline) {
+        // 查找状态标签并更新
+        Container contentPane = dialog.getContentPane();
+        if (contentPane.getComponentCount() > 0) {
+            Component comp = contentPane.getComponent(0);
+            if (comp instanceof JPanel) {
+                JPanel mainPanel = (JPanel) comp;
+                for (Component subComp : mainPanel.getComponents()) {
+                    if (subComp instanceof JPanel) {
+                        JPanel infoPanel = (JPanel) subComp;
+                        for (Component infoComp : infoPanel.getComponents()) {
+                            if (infoComp instanceof JLabel) {
+                                JLabel label = (JLabel) infoComp;
+                                if (label.getText().startsWith("Status:")) {
+                                    label.setText("Status: " + (isOnline ? "waiting" : "disconnected"));
+
+                                    // 如果用户已断开连接，添加自动关闭计时器
+                                    if (!isOnline) {
+                                        startAutoCloseTimer(dialog, label, username);
+                                    }
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * 启动对话框自动关闭计时器
+     */
+    private void startAutoCloseTimer(JDialog dialog, JLabel statusLabel, String username) {
+        Timer timer = new Timer(true);
+        final int[] secondsLeft = {5};
+
+        timer.scheduleAtFixedRate(new TimerTask() {
+            @Override
+            public void run() {
+                SwingUtilities.invokeLater(() -> {
+                    secondsLeft[0]--;
+                    statusLabel.setText("Status: disconnected (close after " + secondsLeft[0] + "s)");
+
+                    if (secondsLeft[0] <= 0) {
+                        timer.cancel();
+                        dialog.dispose();
+                        pendingUserDialogs.remove(username);
+                    }
+                });
+            }
+        }, 1000, 1000);
+    }
+
+
+}
+
+===== .\src\main\java\com\whiteboard\client\ui\WhiteboardPanel.java =====
+package com.whiteboard.client.ui;
+import com.whiteboard.client.shapes.ErasureShape;
+import com.whiteboard.client.shapes.Shape;
+import com.whiteboard.client.shapes.Text;
+import com.whiteboard.client.shapes.Rectangle;
+import com.whiteboard.client.shapes.Oval;
+import com.whiteboard.client.shapes.Line;
+import com.whiteboard.client.shapes.Triangle;
+import javax.swing.*;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
+import java.awt.*;
+import java.awt.event.*;
+import java.util.List;
+import java.util.function.Consumer;
+
+
+import com.whiteboard.client.tools.*;
+import java.util.ArrayList;
+
+public class WhiteboardPanel extends JPanel {
+    private List<Shape> shapes;
+    private DrawingTool currentTool;
+    private Color currentColor;
+    private int currentStrokeWidth;
+    private Font currentFont;
+    private ToolPanel toolPanel;
+    private Point currentPoint;
+    private Consumer<Shape> drawingListener;
+
+
+
+
+    public WhiteboardPanel() {
+        shapes = new ArrayList<>();
+        currentColor = Color.BLACK;
+        currentStrokeWidth = 2;
+        currentFont = new Font("Arial Unicode MS", Font.PLAIN, 14);
+
+        // 默认工具为铅笔（自由绘制）
+        currentTool = new PencilTool(currentColor, currentStrokeWidth);
+
+        setBackground(Color.WHITE);
+        setupMouseListeners();
+
+        // 添加透明度测试
+//        testTransparency();
+    }
+
+    private void setupMouseListeners() {
+        MouseAdapter mouseAdapter = new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                if (currentTool instanceof TextTool) {
+                    // 弹出文本输入对话框
+                    TextTool textTool = (TextTool) currentTool;
+                    textTool.mousePressed(e.getPoint());
+                    showTextInputDialog(textTool);
+                    repaint(); // 确保立即显示光标和预览
+                } else if (currentTool instanceof EraserTool) {
+                    // 橡皮擦处理
+                    EraserTool eraserTool = (EraserTool) currentTool;
+                    eraserTool.mousePressed(e.getPoint());
+                    processEraser(eraserTool);
+                } else {
+                    // 其他工具处理
+                    currentTool.mousePressed(e.getPoint());
+                    repaint();
+                }
+            }
+
+            @Override
+            public void mouseDragged(MouseEvent e) {
+                if (currentTool instanceof TextTool) {
+                    // 文本工具不处理拖动
+                    return;
+                } else if (currentTool instanceof EraserTool) {
+                    // 橡皮擦处理
+                    EraserTool eraserTool = (EraserTool) currentTool;
+                    eraserTool.mouseDragged(e.getPoint());
+                    processEraser(eraserTool);
+                } else {
+                    // 其他工具处理
+                    currentTool.mouseDragged(e.getPoint());
+                    repaint();
+                }
+            }
+
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                if (currentTool instanceof TextTool) {
+                    // 文本工具不处理释放
+                    return;
+                } else if (currentTool instanceof EraserTool) {
+                    // 橡皮擦工具处理
+                    EraserTool eraserTool = (EraserTool) currentTool;
+                    eraserTool.mouseReleased(e.getPoint());
+                    processEraser(eraserTool);
+
+                    // 确保路径被清除
+                    eraserTool.clearPath();
+                    repaint();
+                } else {
+                    // 其他工具处理
+                    currentTool.mouseReleased(e.getPoint());
+                    Shape shape = currentTool.getCreatedShape();
+                    if (shape != null) {
+                        shapes.add(shape);
+
+                        // 如果有绘图监听器，通知形状变化
+                        if (drawingListener != null) {
+                            drawingListener.accept(shape);
+                        }
+                    }
+                    repaint();
+                }
+            }
+            // 添加鼠标移动监听
+            @Override
+            public void mouseMoved(MouseEvent e) {
+                // 如果当前工具是橡皮擦，更新位置
+                if (currentTool instanceof EraserTool) {
+                    EraserTool eraserTool = (EraserTool) currentTool;
+                    // 仅更新当前位置，不添加到路径
+                    eraserTool.setCurrentPoint(e.getPoint());
+                    repaint();
+                }
+            }
+
+        };
+
+        addMouseListener(mouseAdapter);
+        addMouseMotionListener(mouseAdapter);
+    }
+
+    private void processEraser(EraserTool eraserTool) {
+        if (eraserTool.getCurrentPoint() == null) return;
+
+        Point p = eraserTool.getCurrentPoint();
+        int size = eraserTool.getEraserSize();
+
+        if (eraserTool.getMode() == EraserTool.EraseMode.OBJECT) {
+            // 对象擦除模式
+            //processObjectEraser(eraserTool, p, size);
+        } else {
+            // 自由擦除模式
+            processFreeEraser(eraserTool);
+        }
+
+        repaint();
+    }
+
+    // 修改对象擦除处理方法
+    private void processObjectEraser(EraserTool eraserTool, Point p, int size) {
+        // 创建橡皮擦圆形区域
+        java.awt.geom.Ellipse2D eraserShape =
+                new java.awt.geom.Ellipse2D.Double(p.x - size/2, p.y - size/2, size, size);
+
+        // 检查哪些形状与橡皮擦相交
+        List<Shape> toPreview = new ArrayList<>();
+
+        for (Shape shape : shapes) {
+            // 检测相交 - 简化版实现，可以根据需要改进
+            if (eraserIntersectsShape(eraserShape, shape)) {
+                toPreview.add(shape);
+            }
+        }
+
+        // 清除之前的预览但现在不在预览列表中的形状
+        for (Shape shape : eraserTool.getShapesToPreview()) {
+            if (!toPreview.contains(shape)) {
+                // 不再预览的形状，恢复正常
+                shape.clearTempAlpha();
+            }
+        }
+
+        // 设置新的预览
+        eraserTool.clearShapesToPreview();
+
+        for (Shape shape : toPreview) {
+            // 设置半透明预览（50%透明度）
+            shape.setTempAlpha(127); // 半透明，Alpha值为127
+            eraserTool.addShapeToPreview(shape);
+        }
+
+        // 鼠标松开时才执行实际擦除
+        if (!eraserTool.getErasePath().isEmpty() &&
+                p.equals(eraserTool.getErasePath().get(eraserTool.getErasePath().size() - 1))) {
+
+            // 移除所有预览中的形状
+            shapes.removeAll(eraserTool.getShapesToPreview());
+            eraserTool.clearShapesToPreview();
+
+            // 清除路径
+            eraserTool.clearPath();
+        }
+
+        repaint();
+    }
+
+    // 检查橡皮擦与形状相交的逻辑（改进版）
+    private boolean eraserIntersectsShape(java.awt.geom.Ellipse2D eraser, Shape shape) {
+        // 1. 检查形状的起点和终点是否在橡皮擦范围内
+        if (eraser.contains(shape.getStartPoint()) || eraser.contains(shape.getEndPoint())) {
+            return true;
+        }
+
+        // 2. 对于特定类型的形状，执行更精确的检测
+        if (shape instanceof Line) {
+            Line line = (Line) shape;
+            // 使用Line2D检测直线与圆的相交
+            java.awt.geom.Line2D lineShape = new java.awt.geom.Line2D.Double(
+                    line.getStartPoint(), line.getEndPoint());
+
+            // 圆的边界矩形
+            double x = eraser.getX();
+            double y = eraser.getY();
+            double w = eraser.getWidth();
+            double h = eraser.getHeight();
+
+            // 检测线段是否与圆相交
+            return lineShape.intersects(x, y, w, h);
+        }
+        else if (shape instanceof Rectangle) {
+            Rectangle rect = (Rectangle) shape;
+            // 创建Rectangle2D对象
+            java.awt.geom.Rectangle2D rectShape = createRectangleFromShape(rect);
+            // 检测矩形是否与圆相交
+            return rectShape.intersects(eraser.getX(), eraser.getY(), eraser.getWidth(), eraser.getHeight());
+        }
+        else if (shape instanceof Oval) {
+            Oval oval = (Oval) shape;
+            // 创建Ellipse2D对象
+            java.awt.geom.Ellipse2D ovalShape = createEllipseFromShape(oval);
+            // 检测椭圆是否与圆相交 - 近似检测
+            return ovalShape.intersects(eraser.getX(), eraser.getY(), eraser.getWidth(), eraser.getHeight());
+        }
+
+        // 3. 对于其他类型或更复杂的形状，使用简化检测
+        return shape.contains(new Point((int)eraser.getCenterX(), (int)eraser.getCenterY()));
+    }
+
+    // 辅助方法：从形状创建Rectangle2D对象
+    private java.awt.geom.Rectangle2D createRectangleFromShape(Rectangle rect) {
+        int x = Math.min(rect.getStartPoint().x, rect.getEndPoint().x);
+        int y = Math.min(rect.getStartPoint().y, rect.getEndPoint().y);
+        int width = Math.abs(rect.getEndPoint().x - rect.getStartPoint().x);
+        int height = Math.abs(rect.getEndPoint().y - rect.getStartPoint().y);
+
+        return new java.awt.geom.Rectangle2D.Double(x, y, width, height);
+    }
+
+    // 辅助方法：从形状创建Ellipse2D对象
+    private java.awt.geom.Ellipse2D createEllipseFromShape(Oval oval) {
+        int x = Math.min(oval.getStartPoint().x, oval.getEndPoint().x);
+        int y = Math.min(oval.getStartPoint().y, oval.getEndPoint().y);
+        int width = Math.abs(oval.getEndPoint().x - oval.getStartPoint().x);
+        int height = Math.abs(oval.getEndPoint().y - oval.getStartPoint().y);
+
+        return new java.awt.geom.Ellipse2D.Double(x, y, width, height);
+    }
+
+    // 修改WhiteboardPanel中的processFreeEraser方法
+    private void processFreeEraser(EraserTool eraserTool) {
+        List<Point> path = eraserTool.getErasePath();
+        if (path.size() < 2) return;
+
+        int size = eraserTool.getEraserSize();
+
+        // 鼠标释放时，创建一个擦除形状
+        if (!path.isEmpty() &&
+                eraserTool.getCurrentPoint().equals(path.get(path.size() - 1))) {
+
+            // 创建一个使用背景色的擦除形状
+            ErasureShape erasureShape = new ErasureShape(
+                    new ArrayList<>(path), // 复制当前路径
+                    size,
+                    getBackground() // 使用画布背景色
+            );
+
+            // 添加到形状列表
+            shapes.add(erasureShape);
+
+            // 清除路径以便下次擦除
+            eraserTool.clearPath();
+        }
+
+        repaint();
+    }
+
+    // 检查线段是否与形状相交
+    private boolean lineIntersectsShape(java.awt.geom.Line2D line, Shape shape, double tolerance) {
+        // 检查多个点沿线段是否与形状相交
+        for (int i = 0; i <= 10; i++) {
+            double t = i / 10.0;
+            int x = (int)(line.getX1() * (1-t) + line.getX2() * t);
+            int y = (int)(line.getY1() * (1-t) + line.getY2() * t);
+
+            Point p = new Point(x, y);
+
+            // 计算点到形状的距离
+            if (shape.contains(p)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // 修改文本输入对话框方法，使用固定字体确保支持Unicode字符
+    private void showTextInputDialog(TextTool textTool) {
+        // 创建文本输入对话框
+        JDialog dialog = new JDialog();
+        dialog.setTitle("Text Tool");
+        dialog.setModal(false);
+        dialog.setLayout(new BorderLayout());
+
+        // 找到当前窗口并设置相对位置
+        if (SwingUtilities.getWindowAncestor(this) != null) {
+            dialog.setLocationRelativeTo(SwingUtilities.getWindowAncestor(this));
+        } else {
+            dialog.setLocationRelativeTo(null); // 居中显示
+        }
+
+        // 使用固定的多语言支持字体
+        // 这些字体都有很好的Unicode支持
+        final Font UNICODE_FONT = new Font("Arial Unicode MS", Font.PLAIN, 14);
+        final Font FALLBACK_FONT = new Font("Dialog", Font.PLAIN, 14); // 备用字体
+
+        // 文本输入区域 - 确保支持Unicode
+        JTextArea textArea = new JTextArea(5, 20);
+        try {
+            textArea.setFont(UNICODE_FONT);
+        } catch (Exception e) {
+            textArea.setFont(FALLBACK_FONT); // 如果首选字体不可用，使用备用字体
+        }
+        textArea.setLineWrap(true);
+        textArea.setWrapStyleWord(true);
+        textArea.enableInputMethods(true); // 确保启用输入法
+
+        JScrollPane scrollPane = new JScrollPane(textArea);
+
+        // 简化后的字体大小控制面板
+        JPanel fontPanel = new JPanel(new BorderLayout(5, 0));
+        JPanel fontControls = new JPanel(new FlowLayout(FlowLayout.LEFT));
+
+        // 字体大小控制
+        JLabel fontSizeLabel = new JLabel("Font Size:");
+        JTextField fontSizeField = new JTextField(String.valueOf(textTool.getFont().getSize()), 3);
+
+        fontControls.add(fontSizeLabel);
+        fontControls.add(fontSizeField);
+
+        // 字体大小变化监听
+        fontSizeField.addActionListener(new ActionListener() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                processFontSizeChange(fontSizeField, textTool);
+            }
+        });
+
+        fontSizeField.addFocusListener(new FocusAdapter() {
+            @Override
+            public void focusLost(FocusEvent e) {
+                processFontSizeChange(fontSizeField, textTool);
+            }
+        });
+
+        fontPanel.add(fontControls, BorderLayout.CENTER);
+
+        // 按钮面板
+        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        JButton okButton = new JButton("OK");
+        JButton cancelButton = new JButton("Cancel");
+
+        // 文本区域的keyup事件监听，实时更新预览
+        textArea.getDocument().addDocumentListener(new DocumentListener() {
+            @Override
+            public void insertUpdate(DocumentEvent e) {
+                updatePreview();
+            }
+
+            @Override
+            public void removeUpdate(DocumentEvent e) {
+                updatePreview();
+            }
+
+            @Override
+            public void changedUpdate(DocumentEvent e) {
+                updatePreview();
+            }
+
+            private void updatePreview() {
+                textTool.setText(textArea.getText());
+                repaint(); // 更新画布上的预览
+            }
+        });
+
+        // 确定按钮动作
+        okButton.addActionListener(new ActionListener() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                textTool.setText(textArea.getText());
+                textTool.finishEditing();
+
+                // 如果创建了有效的文本对象，则添加到画布
+                Shape textShape = textTool.getCreatedShape();
+                if (textShape != null) {
+                    shapes.add(textShape);
+                }
+
+                dialog.dispose();
+                repaint();
+            }
+        });
+
+        // 取消按钮动作
+        cancelButton.addActionListener(new ActionListener() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                textTool.finishEditing();
+                dialog.dispose();
+                repaint();
+            }
+        });
+
+        // 组装对话框
+        JPanel controlPanel = new JPanel(new BorderLayout());
+        controlPanel.add(fontPanel, BorderLayout.NORTH);
+
+        buttonPanel.add(okButton);
+        buttonPanel.add(cancelButton);
+
+        dialog.add(scrollPane, BorderLayout.CENTER);
+        dialog.add(controlPanel, BorderLayout.NORTH);
+        dialog.add(buttonPanel, BorderLayout.SOUTH);
+
+        dialog.pack();
+        dialog.setVisible(true);
+    }
+
+    // 修改处理字体大小变更的方法，保持固定字体系列
+    private void processFontSizeChange(JTextField fontSizeField, TextTool textTool) {
+        try {
+            String input = fontSizeField.getText().trim();
+            double doubleValue = Double.parseDouble(input);
+            int size = (int) Math.round(doubleValue);
+            size = Math.max(1, size);
+            size = Math.min(size, 72); // 最大字体大小为72
+
+            fontSizeField.setText(String.valueOf(size));
+
+            // 使用固定字体系列，仅改变大小
+            Font newFont = new Font("Arial Unicode MS", Font.PLAIN, size);
+            textTool.setFont(newFont);
+            repaint(); // 更新预览
+        } catch (NumberFormatException ex) {
+            // 如果输入无效，恢复为当前字体大小
+            fontSizeField.setText(String.valueOf(textTool.getFont().getSize()));
+        }
+    }
+
+    // 修改处理字体大小变更的方法，添加字体系列参数
+    private void processFontSizeChange(JTextField fontSizeField, TextTool textTool, JComboBox<String> fontFamilyCombo) {
+        try {
+            String input = fontSizeField.getText().trim();
+            double doubleValue = Double.parseDouble(input);
+            int size = (int) Math.round(doubleValue);
+            size = Math.max(1, size);
+            size = Math.min(size, 72); // 最大字体大小为72
+
+            fontSizeField.setText(String.valueOf(size));
+
+            String family = (String) fontFamilyCombo.getSelectedItem();
+            Font newFont = new Font(family, Font.PLAIN, size);
+            textTool.setFont(newFont);
+            repaint(); // 更新预览
+        } catch (NumberFormatException ex) {
+            // 如果输入无效，恢复为当前字体大小
+            fontSizeField.setText(String.valueOf(textTool.getFont().getSize()));
+        }
+    }
+
+
+    @Override
+    protected void paintComponent(Graphics g) {
+        super.paintComponent(g);
+        Graphics2D g2d = (Graphics2D) g;
+
+        // 设置抗锯齿
+        g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
+                RenderingHints.VALUE_ANTIALIAS_ON);
+
+        // 绘制所有形状
+        for (Shape shape : shapes) {
+            shape.draw(g2d);
+        }
+
+        // 绘制当前正在创建的形状
+        if (currentTool != null) {
+            if (currentTool instanceof TextTool) {
+                TextTool textTool = (TextTool) currentTool;
+                if (textTool.isEditing()) {
+                    // 绘制文本预览
+                    Shape textShape = textTool.getCreatedShape();
+                    if (textShape != null) {
+                        textShape.draw(g2d);
+
+                        // 绘制文本光标
+                        if (textShape instanceof Text) {
+                            Text text = (Text) textShape;
+                            Point p = text.getStartPoint();
+                            FontMetrics metrics = g2d.getFontMetrics(text.getFont());
+                            int textWidth = metrics.stringWidth(text.getText());
+
+                            // 闪烁光标效果
+                            if (System.currentTimeMillis() % 1000 < 500) {
+                                g2d.setColor(Color.BLACK);
+                                g2d.drawLine(p.x + textWidth, p.y - metrics.getAscent(),
+                                        p.x + textWidth, p.y + metrics.getDescent());
+                            }
+                        }
+                    }
+                }
+            } else if (!(currentTool instanceof EraserTool)) {
+                Shape currentShape = currentTool.getCreatedShape();
+                if (currentShape != null) {
+                    currentShape.draw(g2d);
+                }
+            }
+        }
+
+        if (currentTool instanceof EraserTool) {
+            EraserTool eraserTool = (EraserTool) currentTool;
+            Point p = eraserTool.getCurrentPoint();
+            if (p != null) {
+                int size = eraserTool.getEraserSize();
+
+                // 绘制轨迹（对象模式显示轨迹，自由模式不显示）
+                if (eraserTool.getMode() == EraserTool.EraseMode.OBJECT) {
+                    List<Point> path = eraserTool.getErasePath();
+                    if (path.size() > 1) {
+                        g2d.setColor(new Color(200, 200, 200, 100)); // 半透明灰色
+                        g2d.setStroke(new BasicStroke(size, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+
+                        for (int i = 0; i < path.size() - 1; i++) {
+                            Point p1 = path.get(i);
+                            Point p2 = path.get(i + 1);
+                            g2d.drawLine(p1.x, p1.y, p2.x, p2.y);
+                        }
+                    }
+                }
+
+                // 绘制当前位置指示器（圆形）
+                g2d.setColor(new Color(200, 200, 200, 150));
+                g2d.fillOval(p.x - size/2, p.y - size/2, size, size);
+                g2d.setColor(Color.DARK_GRAY);
+                g2d.drawOval(p.x - size/2, p.y - size/2, size, size);
+
+            }
+        }
+    }
+
+    // 设置当前工具
+    public void setCurrentTool(DrawingTool tool) {
+        this.currentTool = tool;
+    }
+
+    // 设置当前颜色
+    public void setCurrentColor(Color color) {
+        this.currentColor = color;
+        updateToolColor();
+
+        // 通知ToolPanel更新预览
+        if (toolPanel != null) {
+            toolPanel.updatePreview();
+        }
+    }
+
+    // 设置当前线宽
+    public void setCurrentStrokeWidth(int width) {
+        this.currentStrokeWidth = width;
+        updateToolStrokeWidth();
+    }
+
+    // 设置当前字体
+    public void setCurrentFont(Font font) {
+        this.currentFont = font;
+        if (currentTool instanceof TextTool) {
+            currentTool = new TextTool(currentColor, font);
+        }
+    }
+
+    // 更新工具颜色
+    private void updateToolColor() {
+        if (currentTool instanceof LineTool) {
+            currentTool = new LineTool(currentColor, currentStrokeWidth);
+        } else if (currentTool instanceof RectangleTool) {
+            currentTool = new RectangleTool(currentColor, currentStrokeWidth);
+        } else if (currentTool instanceof OvalTool) {
+            currentTool = new OvalTool(currentColor, currentStrokeWidth);
+        } else if (currentTool instanceof TriangleTool) {
+            currentTool = new TriangleTool(currentColor, currentStrokeWidth);
+        } else if (currentTool instanceof PencilTool) {
+            currentTool = new PencilTool(currentColor, currentStrokeWidth);
+        } else if (currentTool instanceof TextTool) {
+            currentTool = new TextTool(currentColor, currentFont);
+        }
+        // EraserTool不受颜色影响
+    }
+
+    // 更新工具线宽
+    private void updateToolStrokeWidth() {
+        if (currentTool instanceof LineTool) {
+            currentTool = new LineTool(currentColor, currentStrokeWidth);
+        } else if (currentTool instanceof RectangleTool) {
+            currentTool = new RectangleTool(currentColor, currentStrokeWidth);
+        } else if (currentTool instanceof OvalTool) {
+            currentTool = new OvalTool(currentColor, currentStrokeWidth);
+        } else if (currentTool instanceof TriangleTool) {
+            currentTool = new TriangleTool(currentColor, currentStrokeWidth);
+        } else if (currentTool instanceof PencilTool) {
+            currentTool = new PencilTool(currentColor, currentStrokeWidth);
+        } else if (currentTool instanceof EraserTool) {
+            currentTool = new EraserTool(currentStrokeWidth * 5); // 橡皮擦尺寸为线宽的5倍
+        }
+        // TextTool不受线宽影响
+    }
+
+    // 清除画布
+    public void clearCanvas() {
+        shapes.clear();
+
+        // 重置当前工具状态，取消任何正在进行的绘制操作
+        if (currentTool != null) {
+            // 对于不同类型的工具可能需要不同的处理
+            if (currentTool instanceof PencilTool) {
+                // 重新创建一个新的同类型工具，保持颜色和线宽不变
+                currentTool = new PencilTool(currentColor, currentStrokeWidth);
+            } else if (currentTool instanceof LineTool) {
+                currentTool = new LineTool(currentColor, currentStrokeWidth);
+            } else if (currentTool instanceof RectangleTool) {
+                currentTool = new RectangleTool(currentColor, currentStrokeWidth);
+            } else if (currentTool instanceof OvalTool) {
+                currentTool = new OvalTool(currentColor, currentStrokeWidth);
+            } else if (currentTool instanceof TriangleTool) {
+                currentTool = new TriangleTool(currentColor, currentStrokeWidth);
+            } else if (currentTool instanceof TextTool) {
+                Font currentFont = new Font("Arial", Font.PLAIN,
+                        toolPanel != null ? toolPanel.getCurrentFontSize() : 14);
+                currentTool = new TextTool(currentColor, currentFont);
+            } else if (currentTool instanceof EraserTool) {
+                EraserTool eraserTool = (EraserTool) currentTool;
+                int size = eraserTool.getEraserSize();
+                currentTool = new EraserTool(size);
+            }
+        }
+
+        repaint();
+    }
+
+    // 获取所有形状
+    public List<Shape> getShapes() {
+        return new ArrayList<>(shapes);
+    }
+
+    // 设置形状列表
+    public void setShapes(List<Shape> shapes) {
+        this.shapes = new ArrayList<>(shapes);
+        repaint();
+    }
+
+    public void setToolPanel(ToolPanel toolPanel) {
+        this.toolPanel = toolPanel;
+    }
+
+    /*
+     * test methods
+     */
+
+    // 临时测试透明度功能，可在初始化后调用或通过特定按键触发
+//    private void testTransparency() {
+//        // 创建两个重叠的形状
+//        Point p1 = new Point(100, 100);
+//        Point p2 = new Point(300, 300);
+//
+//        Rectangle rect = new Rectangle(p1, p2, Color.RED, 2);
+//        shapes.add(rect);
+//
+//        Point p3 = new Point(200, 100);
+//        Point p4 = new Point(400, 300);
+//
+//        Rectangle rect2 = new Rectangle(p3, p4, Color.BLUE, 2);
+//        // 设置临时透明度为半透明
+//        rect2.setTempAlpha(128);
+//        shapes.add(rect2);
+//
+//        repaint();
+//    }
+
+    // getters for current tool and color
+    public DrawingTool getCurrentTool() {
+        return currentTool;
+    }
+
+    public Color getCurrentColor() {
+        return currentColor;
+    }
+
+    public Font getCurrentFont() {
+        return currentFont;
+    }
+
+    // Connection related methods
+    // 设置绘制监听器
+    public void setDrawingListener(Consumer<Shape> listener) {
+        this.drawingListener = listener;
+    }
+
+    public void addShape(Shape shape) {
+        if (shape != null) {
+            shapes.add(shape);
+            repaint();
+        }
+    }
+
+    public void removeShape(String shapeId) {
+        shapes.removeIf(shape -> shape.getId().equals(shapeId));
+        repaint();
+    }
+
+
+}
+
+===== .\src\main\java\com\whiteboard\common\model\DrawOperation.java =====
+package com.whiteboard.common.model;
+
+import java.io.Serializable;
+import com.whiteboard.client.shapes.Shape;
+
+public class DrawOperation implements Serializable {
+    private static final long serialVersionUID = 1L;
+
+    public enum OperationType {
+        ADD_SHAPE, REMOVE_SHAPE, CLEAR, UPDATE_SHAPE
+    }
+
+    private OperationType type;
+    private Shape shape;
+    private String sessionId;
+    private long timestamp;
+
+    public DrawOperation(OperationType type, Shape shape, String sessionId) {
+        this.type = type;
+        this.shape = shape;
+        this.sessionId = sessionId;
+        this.timestamp = System.currentTimeMillis();
+    }
+
+    // Getters
+    public OperationType getType() {
+        return type;
+    }
+
+    public Shape getShape() {
+        return shape;
+    }
+
+    public String getSessionId() {
+        return sessionId;
+    }
+
+    public long getTimestamp() {
+        return timestamp;
+    }
+}
+
+===== .\src\main\java\com\whiteboard\common\model\User.java =====
+package com.whiteboard.common.model;
+
+import java.io.Serializable;
+
+public class User implements Serializable {
+    private static final long serialVersionUID = 1L;
+
+    private String uid;         // 系统生成的唯一标识符
+    private String username;    // 用户提供的显示名称
+    private String sessionId;   // 会话ID
+    private boolean isManager;  // 是否为管理员
+    private long lastActivity;  // 最后活动时间
+
+    public User(String uid, String username, boolean isManager) {
+        this.uid = uid;
+        this.username = username;
+        this.isManager = isManager;
+        this.lastActivity = System.currentTimeMillis();
+    }
+
+    // 添加 getter/setter 方法
+    public String getUid() {
+        return uid;
+    }
+
+    public String getUsername() {
+        return username;
+    }
+
+    public String getSessionId() {
+        return sessionId;
+    }
+
+    public void setSessionId(String sessionId) {
+        this.sessionId = sessionId;
+    }
+
+    public boolean isManager() {
+        return isManager;
+    }
+
+    public long getLastActivity() {
+        return lastActivity;
+    }
+
+    public void setLastActivity(long lastActivity) {
+        this.lastActivity = lastActivity;
+    }
+
+    public void updateActivity() {
+        this.lastActivity = System.currentTimeMillis();
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+        if (this == obj) return true;
+        if (obj == null || getClass() != obj.getClass()) return false;
+
+        User other = (User) obj;
+        return uid != null ? uid.equals(other.uid) : other.uid == null;
+    }
+
+    @Override
+    public int hashCode() {
+        return uid != null ? uid.hashCode() : 0;
+    }
+}
+
+===== .\src\main\java\com\whiteboard\common\model\WhiteboardState.java =====
+package com.whiteboard.common.model;
+
+import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+import com.whiteboard.client.shapes.Shape;
+
+public class WhiteboardState implements Serializable {
+    private static final long serialVersionUID = 1L;
+
+    private List<Shape> shapes;
+    private long version;
+
+    public WhiteboardState() {
+        shapes = new ArrayList<>();
+        version = 0;
+    }
+
+    public List<Shape> getShapes() {
+        return new ArrayList<>(shapes);
+    }
+
+    public void setShapes(List<Shape> shapes) {
+        this.shapes = new ArrayList<>(shapes);
+        version++;
+    }
+
+    public void addShape(Shape shape) {
+        shapes.add(shape);
+        version++;
+    }
+
+    /**
+     * 根据ID移除形状
+     * @param shapeId 要移除的形状ID
+     * @return 是否成功移除
+     */
+    public boolean removeShape(String shapeId) {
+        Iterator<Shape> iterator = shapes.iterator();
+        while (iterator.hasNext()) {
+            Shape shape = iterator.next();
+            if (shape.getId().equals(shapeId)) {
+                iterator.remove();
+                version++;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public void clear() {
+        shapes.clear();
+        version++;
+    }
+
+    public long getVersion() {
+        return version;
+    }
+}
+
+===== .\src\main\java\com\whiteboard\common\remote\IWhiteboardClient.java =====
+package com.whiteboard.common.remote;
+
+import java.rmi.Remote;
+import java.rmi.RemoteException;
+import java.util.List;
+import com.whiteboard.client.shapes.Shape;
+
+public interface IWhiteboardClient extends Remote {
+    // 原有方法
+    void updateShape(Shape shape) throws RemoteException;
+    void removeShape(String shapeId) throws RemoteException;
+    void updateUserList(List<String> users) throws RemoteException;
+    void receiveMessage(String senderName, String message) throws RemoteException;
+    void notifyManagerDecision(boolean approved) throws RemoteException;
+    void notifyManagerLeft() throws RemoteException;
+    void notifyKicked() throws RemoteException;
+    void receiveClearCanvas() throws RemoteException;
+
+    // 新增方法
+    void notifyPendingJoinRequest(String username, boolean isOnline) throws RemoteException;
+    void notifyServerDisconnected() throws RemoteException;
+    void heartbeat() throws RemoteException; // 心跳检测
+}
+
+===== .\src\main\java\com\whiteboard\common\remote\IWhiteboardServer.java =====
+package com.whiteboard.common.remote;
+
+import java.rmi.Remote;
+import java.rmi.RemoteException;
+import java.util.List;
+import com.whiteboard.client.shapes.Shape;
+
+public interface IWhiteboardServer extends Remote {
+    // 原有方法
+    String connectUser(String username) throws RemoteException;
+    boolean approveUser(String username, String managerId) throws RemoteException;
+    void disconnectUser(String sessionId) throws RemoteException;
+    List<String> getConnectedUsers() throws RemoteException;
+    boolean kickUser(String username, String managerId) throws RemoteException;
+    boolean isManager(String sessionId) throws RemoteException;
+    void addShape(Shape shape, String sessionId) throws RemoteException;
+    void removeShape(String shapeId, String sessionId) throws RemoteException;
+    void clearCanvas(String sessionId) throws RemoteException;
+    List<Shape> getAllShapes() throws RemoteException;
+    void registerClient(String sessionId, IWhiteboardClient client) throws RemoteException;
+    void unregisterClient(String sessionId) throws RemoteException;
+    boolean saveWhiteboard(String filename, String sessionId) throws RemoteException;
+    boolean loadWhiteboard(String filename, String sessionId) throws RemoteException;
+    void sendChatMessage(String message, String senderSessionId) throws RemoteException;
+
+    // 新增方法
+    void requestJoin(String username, String sessionId) throws RemoteException;
+    void rejectUser(String username, String managerId) throws RemoteException;
+    void updateUserActivity(String sessionId) throws RemoteException;
+}
+
+===== .\src\main\java\com\whiteboard\server\ServerStarter.java =====
+package com.whiteboard.server;
+
+import java.rmi.registry.LocateRegistry;
+import java.rmi.registry.Registry;
+import java.rmi.server.UnicastRemoteObject;
+import java.util.logging.Logger;
+
+import com.whiteboard.common.remote.IWhiteboardServer;
+
+public class ServerStarter {
+    private static final Logger logger = Logger.getLogger(ServerStarter.class.getName());
+
+    public static void main(String[] args) {
+        try {
+            // 可选：设置安全管理器
+            // System.setProperty("java.security.policy", "server.policy");
+            // if (System.getSecurityManager() == null) {
+            //     System.setSecurityManager(new SecurityManager());
+            // }
+
+            // 创建服务器实例
+            WhiteboardServer server = new WhiteboardServer();
+
+            // 导出远程对象
+            IWhiteboardServer stub = (IWhiteboardServer) UnicastRemoteObject.exportObject(server, 0);
+
+            // 创建注册表
+            int port = 1099; // 默认RMI端口
+            if (args.length > 0) {
+                try {
+                    port = Integer.parseInt(args[0]);
+                } catch (NumberFormatException e) {
+                    logger.warning("Invalid port number: " + args[0] + ", using default port 1099");
+                }
+            }
+
+            Registry registry = LocateRegistry.createRegistry(port);
+
+            // 绑定远程对象
+            registry.rebind("WhiteboardServer", stub);
+
+            logger.info("WhiteboardServer running on port " + port);
+            System.out.println("WhiteboardServer running on port " + port);
+        } catch (Exception e) {
+            logger.severe("WhiteboardServer exception: " + e.getMessage());
+            System.err.println("WhiteboardServer exception: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+}
+
+===== .\src\main\java\com\whiteboard\server\UserManager.java =====
+package com.whiteboard.server;
+
+import com.whiteboard.common.model.User;
+
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Logger;
+
+public class UserManager {
+    private static final Logger logger = Logger.getLogger(UserManager.class.getName());
+
+    private String managerId = null;
+    private Map<String, User> connectedUsers;       // sessionId -> User
+    private Map<String, User> pendingUsers;         // sessionId -> User
+    private Map<String, String> sessionToUid;       // sessionId -> uid
+    private Map<String, String> usernameToUid;      // username -> uid
+    private Set<String> approvedUids;               // 已批准的UID集合
+
+    private final long USER_TIMEOUT_MS = 10000;     // 10秒
+    private final long MANAGER_TIMEOUT_MS = 15000;  // 15秒
+
+    public UserManager() {
+        connectedUsers = new ConcurrentHashMap<>();
+        pendingUsers = new ConcurrentHashMap<>();
+        sessionToUid = new ConcurrentHashMap<>();
+        usernameToUid = new ConcurrentHashMap<>();
+        approvedUids = new HashSet<>();
+
+        // 启动连接监控线程
+        startConnectionMonitor();
+    }
+
+    /**
+     * 连接用户，如果是第一个用户则成为管理员
+     * @param username 用户名
+     * @return 会话ID，如果用户名冲突则返回null
+     */
+    public synchronized String connectUser(String username) {
+        // 生成唯一UID
+        String uid = UUID.randomUUID().toString();
+
+        // 生成唯一会话ID
+        String sessionId = UUID.randomUUID().toString();
+
+        // 检查用户名是否已存在
+        if (usernameToUid.containsKey(username)) {
+            // 用户名冲突处理
+            String originalUsername = username;
+            int suffix = 1;
+            while (usernameToUid.containsKey(username)) {
+                username = originalUsername + "_" + suffix++;
+            }
+            logger.info("Username conflict resolved: " + originalUsername + " -> " + username);
+        }
+
+        // 第一个连接的用户成为管理员
+        boolean isManager = (managerId == null);
+
+        User user = new User(uid, username, isManager);
+        user.setSessionId(sessionId);
+
+        if (isManager) {
+            // 管理员直接连接
+            managerId = sessionId;
+            connectedUsers.put(sessionId, user);
+            sessionToUid.put(sessionId, uid);
+            usernameToUid.put(username, uid);
+            approvedUids.add(uid);  // 管理员自动批准
+            logger.info("Manager connected: " + username + ", UID: " + uid);
+        } else {
+            // 其他用户需要管理员批准
+            pendingUsers.put(sessionId, user);
+            sessionToUid.put(sessionId, uid);
+            logger.info("User pending approval: " + username + ", UID: " + uid);
+        }
+
+        return sessionId;
+    }
+
+    /**
+     * 管理员批准用户
+     * @param username 要批准的用户名
+     * @param managerId 管理员会话ID
+     * @return 是否成功批准
+     */
+    public synchronized boolean approveUser(String username, String managerId) {
+        if (!isManager(managerId)) {
+            logger.warning("Non-manager attempted to approve user: " + username);
+            return false;
+        }
+
+        // 查找匹配的待审核用户
+        String targetUid = null;
+        String pendingSessionId = null;
+
+        for (Map.Entry<String, User> entry : pendingUsers.entrySet()) {
+            if (entry.getValue().getUsername().equals(username)) {
+                pendingSessionId = entry.getKey();
+                targetUid = entry.getValue().getUid();
+                break;
+            }
+        }
+
+        if (pendingSessionId != null && targetUid != null) {
+            User user = pendingUsers.get(pendingSessionId);
+            pendingUsers.remove(pendingSessionId);
+            connectedUsers.put(pendingSessionId, user);
+            approvedUids.add(targetUid);  // 添加到已批准列表
+            logger.info("User approved: " + username + ", UID: " + targetUid);
+            return true;
+        }
+
+        logger.warning("User not found in pending list: " + username);
+        return false;
+    }
+
+    /**
+     * 检查用户是否已被批准
+     * @param uid 用户UID
+     * @return 是否已批准
+     */
+    public boolean isApproved(String uid) {
+        return approvedUids.contains(uid);
+    }
+
+    /**
+     * 从sessionId获取UID
+     * @param sessionId 会话ID
+     * @return UID
+     */
+    public String getUidBySessionId(String sessionId) {
+        return sessionToUid.get(sessionId);
+    }
+
+    /**
+     * 根据用户名获取UID
+     * @param username 用户名
+     * @return UID，如不存在返回null
+     */
+    public String getUidByUsername(String username) {
+        return usernameToUid.get(username);
+    }
+
+    /**
+     * 移除用户
+     * @param sessionId 会话ID
+     */
+    public synchronized void removeUser(String sessionId) {
+        User user = connectedUsers.get(sessionId);
+
+        if (user != null) {
+            connectedUsers.remove(sessionId);
+            String uid = sessionToUid.get(sessionId);
+            sessionToUid.remove(sessionId);
+            usernameToUid.remove(user.getUsername());
+
+            // 如果是管理员离开，应用将终止
+            if (sessionId.equals(managerId)) {
+                managerId = null;
+                logger.warning("Manager has left");
+            }
+
+            logger.info("User removed: " + user.getUsername() + ", UID: " + uid);
+        } else {
+            // 检查待审核用户
+            user = pendingUsers.get(sessionId);
+            if (user != null) {
+                pendingUsers.remove(sessionId);
+                String uid = sessionToUid.get(sessionId);
+                sessionToUid.remove(sessionId);
+                usernameToUid.remove(user.getUsername());
+                logger.info("Pending user removed: " + user.getUsername() + ", UID: " + uid);
+            }
+        }
+    }
+
+    /**
+     * 更新用户活动时间
+     * @param sessionId 会话ID
+     */
+    public void updateUserActivity(String sessionId) {
+        User user = connectedUsers.get(sessionId);
+        if (user != null) {
+            user.updateActivity();
+        } else {
+            user = pendingUsers.get(sessionId);
+            if (user != null) {
+                user.updateActivity();
+            }
+        }
+    }
+
+    /**
+     * 启动连接监控线程
+     */
+    private void startConnectionMonitor() {
+        Timer timer = new Timer(true);
+        timer.scheduleAtFixedRate(new TimerTask() {
+            @Override
+            public void run() {
+                checkConnectionStatus();
+            }
+        }, 5000, 5000); // 每5秒检查一次
+    }
+
+    /**
+     * 检查所有用户的连接状态
+     */
+    private synchronized void checkConnectionStatus() {
+        long currentTime = System.currentTimeMillis();
+        List<String> sessionsToRemove = new ArrayList<>();
+
+        // 检查管理员状态
+        if (managerId != null) {
+            User manager = connectedUsers.get(managerId);
+            if (manager != null && (currentTime - manager.getLastActivity()) > MANAGER_TIMEOUT_MS) {
+                logger.warning("Manager timeout detected");
+                sessionsToRemove.add(managerId);
+            }
+        }
+
+        // 检查已连接用户
+        for (Map.Entry<String, User> entry : connectedUsers.entrySet()) {
+            String sessionId = entry.getKey();
+            if (sessionId.equals(managerId)) continue; // 跳过管理员
+
+            User user = entry.getValue();
+            if ((currentTime - user.getLastActivity()) > USER_TIMEOUT_MS) {
+                logger.info("User timeout detected: " + user.getUsername());
+                sessionsToRemove.add(sessionId);
+            }
+        }
+
+        // 检查等待批准的用户
+        for (Map.Entry<String, User> entry : pendingUsers.entrySet()) {
+            String sessionId = entry.getKey();
+            User user = entry.getValue();
+            if ((currentTime - user.getLastActivity()) > USER_TIMEOUT_MS) {
+                logger.info("Pending user timeout detected: " + user.getUsername());
+                sessionsToRemove.add(sessionId);
+            }
+        }
+
+        // 移除超时用户
+        for (String sessionId : sessionsToRemove) {
+            removeUser(sessionId);
+        }
+    }
+
+    /**
+     * 检查用户是否为管理员
+     * @param sessionId 会话ID
+     * @return 是否为管理员
+     */
+    public boolean isManager(String sessionId) {
+        return sessionId != null && sessionId.equals(managerId);
+    }
+
+    /**
+     * 检查用户是否已连接
+     * @param sessionId 会话ID
+     * @return 是否已连接
+     */
+    public boolean isConnectedUser(String sessionId) {
+        return connectedUsers.containsKey(sessionId);
+    }
+
+    /**
+     * 检查用户是否在等待批准
+     * @param sessionId 会话ID
+     * @return 是否在等待批准
+     */
+    public boolean isPendingUser(String sessionId) {
+        return pendingUsers.containsKey(sessionId);
+    }
+
+    /**
+     * 获取所有已连接用户名
+     * @return 用户名列表
+     */
+    public List<String> getConnectedUsernames() {
+        List<String> usernames = new ArrayList<>();
+        for (User user : connectedUsers.values()) {
+            usernames.add(user.getUsername());
+        }
+        return usernames;
+    }
+
+    /**
+     * 获取所有等待批准的用户名
+     * @return 用户名列表
+     */
+    public List<String> getPendingUsernames() {
+        List<String> usernames = new ArrayList<>();
+        for (User user : pendingUsers.values()) {
+            usernames.add(user.getUsername());
+        }
+        return usernames;
+    }
+
+    /**
+     * 通过会话ID获取用户
+     * @param sessionId 会话ID
+     * @return 用户对象
+     */
+    public User getUserBySessionId(String sessionId) {
+        User user = connectedUsers.get(sessionId);
+        if (user == null) {
+            user = pendingUsers.get(sessionId);
+        }
+        return user;
+    }
+
+    /**
+     * 通过用户名获取用户
+     * @param username 用户名
+     * @return 用户对象
+     */
+    public User getUserByUsername(String username) {
+        String uid = usernameToUid.get(username);
+        if (uid == null) return null;
+
+        // 检查已连接用户
+        for (User user : connectedUsers.values()) {
+            if (user.getUid().equals(uid)) {
+                return user;
+            }
+        }
+
+        // 检查等待用户
+        for (User user : pendingUsers.values()) {
+            if (user.getUid().equals(uid)) {
+                return user;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * 获取管理员ID
+     * @return 管理员会话ID
+     */
+    public String getManagerId() {
+        return managerId;
+    }
+
+    /**
+     * 检查用户名是否存在（包括已连接和等待批准的用户）
+     * @param username 用户名
+     * @return 是否存在
+     */
+    public boolean isUsernameExists(String username) {
+        return usernameToUid.containsKey(username);
+    }
+}
+
+===== .\src\main\java\com\whiteboard\server\WhiteboardServer.java =====
+package com.whiteboard.server;
+
+import com.whiteboard.client.shapes.Shape;
+import com.whiteboard.common.model.User;
+import com.whiteboard.common.model.WhiteboardState;
+import com.whiteboard.common.remote.IWhiteboardClient;
+import com.whiteboard.common.remote.IWhiteboardServer;
+
+import java.io.*;
+import java.rmi.RemoteException;
+import java.rmi.registry.LocateRegistry;
+import java.rmi.registry.Registry;
+import java.rmi.server.UnicastRemoteObject;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Logger;
+
+/**
+ * WhiteboardServer类实现了IWhiteboardServer接口，提供了白板的远程服务。
+ * 它管理用户连接、绘图操作、文件保存和加载等功能。
+ */
+
+public class WhiteboardServer implements IWhiteboardServer {
+    private static final Logger logger = Logger.getLogger(WhiteboardServer.class.getName());
+
+    // 状态和用户管理
+    private WhiteboardState whiteboardState;
+    private UserManager userManager;
+    private Map<String, IWhiteboardClient> clientCallbacks;
+
+    // 锁定管理
+    private Map<String, String> regionLocks; // 区域ID -> 会话ID
+    private static final long LOCK_TIMEOUT_MS = 1000;
+    private static final int REGION_SIZE = 50; // 像素
+
+    public WhiteboardServer() {
+        whiteboardState = new WhiteboardState();
+        userManager = new UserManager();
+        clientCallbacks = new ConcurrentHashMap<>();
+        regionLocks = new ConcurrentHashMap<>();
+
+        // 添加关闭钩子
+        addShutdownHook();
+    }
+
+    // 用户管理方法实现
+@Override
+public String connectUser(String username) throws RemoteException {
+    logger.info("User connecting: " + username);
+
+    // 如果已有管理员且尝试作为管理员登录，则拒绝
+    if (userManager.getManagerId() != null && userManager.getConnectedUsernames().isEmpty()) {
+        logger.warning("Second manager attempted to connect: " + username);
+        return null; // 拒绝连接
+    }
+
+    return userManager.connectUser(username);
+}
+
+    @Override
+    public boolean approveUser(String username, String managerId) throws RemoteException {
+        logger.info("Manager " + managerId + " approving user: " + username);
+        if (userManager.isManager(managerId)) {
+            boolean approved = userManager.approveUser(username, managerId);
+            if (approved) {
+                notifyUserApproved(username);
+                broadcastUserList();
+            }
+            return approved;
+        }
+        return false;
+    }
+
+    @Override
+    public void disconnectUser(String sessionId) throws RemoteException {
+        logger.info("User disconnecting, session: " + sessionId);
+
+        User user = userManager.getUserBySessionId(sessionId);
+        if (user != null) {
+            if (user.isManager()) {
+                // 如果管理员断开连接，通知所有客户端
+                notifyManagerLeft();
+                logger.info("Manager left, notifying all clients");
+            } else {
+                userManager.removeUser(sessionId);
+                clientCallbacks.remove(sessionId);
+                broadcastUserList();
+                logger.info("User removed: " + user.getUsername());
+            }
+        }
+    }
+
+    @Override
+    public List<String> getConnectedUsers() throws RemoteException {
+        return userManager.getConnectedUsernames();
+    }
+
+    @Override
+    public boolean kickUser(String username, String managerId) throws RemoteException {
+        logger.info("Manager " + managerId + " kicking user: " + username);
+        if (userManager.isManager(managerId)) {
+            User userToKick = userManager.getUserByUsername(username);
+            if (userToKick != null && !userToKick.isManager()) {
+                String sessionToKick = userToKick.getSessionId();
+
+                // 通知被踢出的用户
+                IWhiteboardClient clientToKick = clientCallbacks.get(sessionToKick);
+                if (clientToKick != null) {
+                    try {
+                        clientToKick.notifyKicked();
+                    } catch (RemoteException e) {
+                        logger.warning("Error notifying kicked user: " + e.getMessage());
+                    }
+                }
+
+                // 移除用户
+                userManager.removeUser(sessionToKick);
+                clientCallbacks.remove(sessionToKick);
+                broadcastUserList();
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // 绘图操作方法实现
+    @Override
+    public void addShape(Shape shape, String sessionId) throws RemoteException {
+        logger.info("Adding shape from session: " + sessionId);
+
+        // 检查用户权限
+        if (userManager.isConnectedUser(sessionId)) {
+            // 添加形状到白板状态
+            whiteboardState.addShape(shape);
+
+            // 广播形状给所有客户端
+            for (Map.Entry<String, IWhiteboardClient> entry : clientCallbacks.entrySet()) {
+                try {
+                    // 这里打印日志以确认广播确实在发生
+                    logger.info("Broadcasting shape to client: " + entry.getKey());
+                    entry.getValue().updateShape(shape);
+                } catch (RemoteException e) {
+                    logger.warning("Error sending shape update to client: " + e.getMessage());
+                }
+            }
+        }
+    }
+
+    @Override
+    public void removeShape(String shapeId, String sessionId) throws RemoteException {
+        logger.info("Removing shape: " + shapeId + " from session: " + sessionId);
+
+        // 检查用户权限
+        if (userManager.isConnectedUser(sessionId)) {
+            // 从白板状态移除形状
+            whiteboardState.removeShape(shapeId);
+
+            // 广播移除操作给所有客户端
+            for (Map.Entry<String, IWhiteboardClient> entry : clientCallbacks.entrySet()) {
+                if (!entry.getKey().equals(sessionId)) { // 不需要发回给发送者
+                    try {
+                        entry.getValue().removeShape(shapeId);
+                    } catch (RemoteException e) {
+                        logger.warning("Error sending shape removal to client: " + e.getMessage());
+                    }
+                }
+            }
+        }
+    }
+
+    @Override
+    public void clearCanvas(String sessionId) throws RemoteException {
+        logger.info("Clearing canvas, requested by session: " + sessionId);
+
+        // 检查用户权限（只有管理员可以清除画布）
+        if (userManager.isManager(sessionId)) {
+            // 清除白板状态
+            whiteboardState.clear();
+
+            // 广播清除操作给所有客户端
+            for (Map.Entry<String, IWhiteboardClient> entry : clientCallbacks.entrySet()) {
+                if (!entry.getKey().equals(sessionId)) { // 不需要发回给发送者
+                    try {
+                        entry.getValue().receiveClearCanvas();
+                    } catch (RemoteException e) {
+                        logger.warning("Error sending canvas clear to client: " + e.getMessage());
+                    }
+                }
+            }
+        }
+    }
+
+    @Override
+    public List<Shape> getAllShapes() throws RemoteException {
+        return whiteboardState.getShapes();
+    }
+
+    // 客户端注册方法实现
+    @Override
+    public void registerClient(String sessionId, IWhiteboardClient client) throws RemoteException {
+        logger.info("Registering client callback for session: " + sessionId);
+        if (userManager.isConnectedUser(sessionId)) {
+            clientCallbacks.put(sessionId, client);
+            sendInitialState(sessionId);
+            broadcastUserList();
+        }
+    }
+
+    @Override
+    public void unregisterClient(String sessionId) throws RemoteException {
+        logger.info("Unregistering client callback for session: " + sessionId);
+        clientCallbacks.remove(sessionId);
+    }
+
+    // 文件操作方法实现
+    @Override
+    public boolean saveWhiteboard(String filename, String sessionId) throws RemoteException {
+        logger.info("Saving whiteboard to: " + filename);
+
+        // 检查用户权限（只有管理员可以保存）
+        if (userManager.isManager(sessionId)) {
+            try {
+                FileOutputStream fileOut = new FileOutputStream(filename);
+                ObjectOutputStream out = new ObjectOutputStream(fileOut);
+                out.writeObject(whiteboardState);
+                out.close();
+                fileOut.close();
+                logger.info("Whiteboard saved successfully");
+                return true;
+            } catch (IOException e) {
+                logger.severe("Error saving whiteboard: " + e.getMessage());
+                return false;
+            }
+        }
+        return false;
+    }
+
+    @Override
+    public boolean loadWhiteboard(String filename, String sessionId) throws RemoteException {
+        logger.info("Loading whiteboard from: " + filename);
+
+        // 检查用户权限（只有管理员可以加载）
+        if (userManager.isManager(sessionId)) {
+            try {
+                FileInputStream fileIn = new FileInputStream(filename);
+                ObjectInputStream in = new ObjectInputStream(fileIn);
+                whiteboardState = (WhiteboardState) in.readObject();
+                in.close();
+                fileIn.close();
+                logger.info("Whiteboard loaded successfully");
+
+                // 广播新状态给所有客户端
+                for (Map.Entry<String, IWhiteboardClient> entry : clientCallbacks.entrySet()) {
+                    try {
+                        // 清除当前画布
+                        entry.getValue().receiveClearCanvas();
+
+                        // 发送所有形状
+                        for (Shape shape : whiteboardState.getShapes()) {
+                            entry.getValue().updateShape(shape);
+                        }
+                    } catch (RemoteException e) {
+                        logger.warning("Error sending loaded whiteboard to client: " + e.getMessage());
+                    }
+                }
+
+                return true;
+            } catch (IOException | ClassNotFoundException e) {
+                logger.severe("Error loading whiteboard: " + e.getMessage());
+                return false;
+            }
+        }
+        return false;
+    }
+
+    // 聊天功能实现
+    @Override
+    public void sendChatMessage(String message, String senderSessionId) throws RemoteException {
+        logger.info("Chat message from session: " + senderSessionId);
+
+        // 检查用户权限
+        if (userManager.isConnectedUser(senderSessionId)) {
+            User sender = userManager.getUserBySessionId(senderSessionId);
+            String senderName = sender.getUsername();
+
+            // 广播消息给所有客户端
+            for (IWhiteboardClient client : clientCallbacks.values()) {
+                try {
+                    client.receiveMessage(senderName, message);
+                } catch (RemoteException e) {
+                    logger.warning("Error sending chat message to client: " + e.getMessage());
+                }
+            }
+        }
+    }
+
+    // 辅助方法
+    private void broadcastUserList() {
+        List<String> usernames = userManager.getConnectedUsernames();
+        for (IWhiteboardClient client : clientCallbacks.values()) {
+            try {
+                client.updateUserList(usernames);
+            } catch (RemoteException e) {
+                logger.warning("Error broadcasting user list: " + e.getMessage());
+            }
+        }
+    }
+
+    private void notifyManagerLeft() {
+        for (IWhiteboardClient client : clientCallbacks.values()) {
+            try {
+                client.notifyManagerLeft();
+            } catch (RemoteException e) {
+                logger.warning("Error notifying clients that manager left: " + e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * 通知用户已被管理员批准
+     * @param username 被批准的用户名
+     */
+    private void notifyUserApproved(String username) {
+        // 找到用户的会话ID
+        String userSessionId = null;
+        for (Map.Entry<String, IWhiteboardClient> entry : clientCallbacks.entrySet()) {
+            User user = userManager.getUserBySessionId(entry.getKey());
+            if (user != null && user.getUsername().equals(username)) {
+                userSessionId = entry.getKey();
+                break;
+            }
+        }
+
+        if (userSessionId != null) {
+            IWhiteboardClient client = clientCallbacks.get(userSessionId);
+            if (client != null) {
+                try {
+                    client.notifyManagerDecision(true); // true表示被批准
+                    logger.info("Notified user " + username + " that they were approved");
+                } catch (RemoteException e) {
+                    logger.warning("Error notifying user of approval: " + e.getMessage());
+                }
+            }
+        }
+    }
+
+    /**
+     * 发送初始白板状态给新连接的客户端
+     * @param sessionId 客户端会话ID
+     */
+    private void sendInitialState(String sessionId) {
+        IWhiteboardClient client = clientCallbacks.get(sessionId);
+        if (client != null) {
+            try {
+                // 发送所有现有形状
+                List<Shape> shapes = whiteboardState.getShapes();
+                for (Shape shape : shapes) {
+                    client.updateShape(shape);
+                }
+                logger.info("Sent initial state to client: " + sessionId + " (" + shapes.size() + " shapes)");
+            } catch (RemoteException e) {
+                logger.warning("Error sending initial state to client: " + e.getMessage());
+            }
+        }
+    }
+
+    // 并发控制方法
+    private String calculateRegionId(int x, int y) {
+        int regionX = x / REGION_SIZE;
+        int regionY = y / REGION_SIZE;
+        return regionX + ":" + regionY;
+    }
+
+    /**
+     * 处理用户加入请求
+     */
+    @Override
+    public void requestJoin(String username, String sessionId) throws RemoteException {
+        logger.info("Join request from user: " + username + ", session: " + sessionId);
+
+        // 更新用户活动时间
+        userManager.updateUserActivity(sessionId);
+
+        // 获取用户UID
+        String uid = userManager.getUidBySessionId(sessionId);
+        if (uid == null) {
+            logger.warning("Session not found: " + sessionId);
+            return;
+        }
+
+        // 检查是否已批准
+        if (userManager.isApproved(uid)) {
+            // 已批准则直接通知用户
+            IWhiteboardClient client = clientCallbacks.get(sessionId);
+            if (client != null) {
+                try {
+                    client.notifyManagerDecision(true);
+                } catch (RemoteException e) {
+                    logger.warning("Error notifying approved user: " + e.getMessage());
+                }
+            }
+            return;
+        }
+
+        // 如果未批准且不在等待列表，则通知管理员
+        if (!userManager.isPendingUser(sessionId)) {
+            logger.warning("User not in pending list: " + sessionId);
+            return;
+        }
+
+        // 通知管理员
+        notifyManagerAboutPendingUser(username);
+    }
+
+    /**
+     * 通知管理员有新用户请求加入
+     */
+    private void notifyManagerAboutPendingUser(String username) {
+        String managerId = userManager.getManagerId();
+        if (managerId != null) {
+            IWhiteboardClient managerClient = clientCallbacks.get(managerId);
+            if (managerClient != null) {
+                try {
+                    // 检查用户是否在线
+                    User user = userManager.getUserByUsername(username);
+                    boolean isOnline = (user != null &&
+                            (System.currentTimeMillis() - user.getLastActivity()) <= 10000);
+
+                    managerClient.notifyPendingJoinRequest(username, isOnline);
+                    logger.info("Notified manager about pending user: " + username);
+                } catch (RemoteException e) {
+                    logger.warning("Failed to notify manager about pending user: " + e.getMessage());
+                }
+            }
+        }
+    }
+
+    /**
+     * 拒绝用户加入请求
+     */
+    @Override
+    public void rejectUser(String username, String managerId) throws RemoteException {
+        logger.info("Manager " + managerId + " rejecting user: " + username);
+
+        if (!userManager.isManager(managerId)) {
+            logger.warning("Non-manager attempted to reject user: " + username);
+            return;
+        }
+
+        // 查找用户会话
+        User user = userManager.getUserByUsername(username);
+        if (user != null && userManager.isPendingUser(user.getSessionId())) {
+            // 通知用户被拒绝
+            IWhiteboardClient client = clientCallbacks.get(user.getSessionId());
+            if (client != null) {
+                try {
+                    client.notifyManagerDecision(false);
+                    logger.info("Notified user of rejection: " + username);
+                } catch (RemoteException e) {
+                    logger.warning("Error notifying rejected user: " + e.getMessage());
+                }
+            }
+
+            // 从等待列表移除用户
+            userManager.removeUser(user.getSessionId());
+        }
+    }
+
+    /**
+     * 更新用户活动时间
+     */
+    @Override
+    public void updateUserActivity(String sessionId) throws RemoteException {
+        userManager.updateUserActivity(sessionId);
+    }
+
+    // 启动服务器
+    public static void main(String[] args) {
+        try {
+            // 创建服务器实例
+            WhiteboardServer server = new WhiteboardServer();
+
+            // 导出远程对象
+            IWhiteboardServer stub = (IWhiteboardServer) UnicastRemoteObject.exportObject(server, 0);
+
+            // 创建注册表
+            int port = 1099; // 默认RMI端口
+            if (args.length > 0) {
+                port = Integer.parseInt(args[0]);
+            }
+            Registry registry = LocateRegistry.createRegistry(port);
+
+            // 绑定远程对象
+            registry.rebind("WhiteboardServer", stub);
+
+            logger.info("WhiteboardServer running on port " + port);
+        } catch (Exception e) {
+            logger.severe("WhiteboardServer exception: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+    @Override
+    public boolean isManager(String sessionId) throws RemoteException {
+        return userManager.isManager(sessionId);
+    }
+
+    /**
+     * 在服务器关闭前通知所有客户端
+     */
+    private void addShutdownHook() {
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            notifyServerShutdown();
+        }));
+    }
+
+    /**
+     * 通知所有客户端服务器将要关闭
+     */
+    private void notifyServerShutdown() {
+        logger.info("Server shutting down, notifying all clients");
+
+        for (IWhiteboardClient client : clientCallbacks.values()) {
+            try {
+                client.notifyServerDisconnected();
+            } catch (RemoteException e) {
+                // 忽略关闭时的异常
+            }
+        }
+    }
+}
+
+===== .\src\test\java\com\whiteboard\client\ShapeTest.java =====
+package com.whiteboard.client;
+
+public class ShapeTest {
+}
+
+
+===== .\src\test\java\com\whiteboard\server\ServerTest.java =====
+package com.whiteboard.server;
+
+public class ServerTest {
+}

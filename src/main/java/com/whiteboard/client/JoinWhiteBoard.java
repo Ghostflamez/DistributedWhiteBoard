@@ -7,7 +7,6 @@ public class JoinWhiteBoard {
     public static void main(String[] args) {
         if (args.length < 3) {
             System.err.println("Usage: java JoinWhiteBoard <serverIPAddress> <serverPort> <username>");
-            System.out.println("Running in local mode as guest");
 
             try {
                 WhiteboardClient client = new WhiteboardClient("Guest", false);

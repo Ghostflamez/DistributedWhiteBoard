@@ -35,6 +35,9 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
     private Timer joinRequestTimer;
     private boolean isApproved = false;
 
+    private volatile boolean approved = false;
+    private final Object approvalLock = new Object();
+
     // 缓存未处理的更新
     private final List<Shape> pendingShapes = new ArrayList<>();
     private final List<String> pendingShapeRemovals = new ArrayList<>();
@@ -630,6 +633,7 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
                 handleConnectionError(e);
             }
         }
+
     }
 
     /**

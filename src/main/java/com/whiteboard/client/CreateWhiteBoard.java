@@ -7,49 +7,42 @@ public class CreateWhiteBoard {
     public static void main(String[] args) {
         if (args.length < 3) {
             System.err.println("Usage: java CreateWhiteBoard <serverIPAddress> <serverPort> <username>");
-            System.out.println("Running in local mode as manager");
+            return; // 不提供默认值，而是退出
+        }
 
-            try {
-                WhiteboardClient client = new WhiteboardClient("Manager", true);
-            } catch (RemoteException e) {
-                System.err.println("Error creating local client: " + e.getMessage());
-                e.printStackTrace();
-            }
-        } else {
-            String serverIP = args[0];
-            int serverPort;
-            try {
-                serverPort = Integer.parseInt(args[1]);
-            } catch (NumberFormatException e) {
-                System.err.println("Invalid port number: " + args[1]);
-                return;
-            }
-            String username = args[2];
+        String serverIP = args[0];
+        int serverPort;
+        try {
+            serverPort = Integer.parseInt(args[1]);
+        } catch (NumberFormatException e) {
+            System.err.println("Invalid port number: " + args[1]);
+            return;
+        }
+        String username = args[2];
 
-            System.out.println("Connecting to server at " + serverIP + ":" + serverPort + " as " + username);
+        System.out.println("Connecting to server at " + serverIP + ":" + serverPort + " as " + username);
 
-            try {
-                WhiteboardClient client = new WhiteboardClient(username, serverIP, serverPort);
-            } catch (RemoteException e) {
-                System.err.println("Error connecting to server: " + e.getMessage());
-                e.printStackTrace();
+        try {
+            WhiteboardClient client = new WhiteboardClient(username, serverIP, serverPort);
+        } catch (RemoteException e) {
+            System.err.println("Error connecting to server: " + e.getMessage());
+            e.printStackTrace();
 
-                // 提示用户是否要在本地模式运行
-                int response = JOptionPane.showConfirmDialog(
-                        null,
-                        "Failed to connect to server. Would you like to run in local mode?",
-                        "Connection Error",
-                        JOptionPane.YES_NO_OPTION,
-                        JOptionPane.QUESTION_MESSAGE
-                );
+            // 提示用户是否要在本地模式运行
+            int response = JOptionPane.showConfirmDialog(
+                    null,
+                    "Failed to connect to server. Would you like to run in local mode?",
+                    "Connection Error",
+                    JOptionPane.YES_NO_OPTION,
+                    JOptionPane.QUESTION_MESSAGE
+            );
 
-                if (response == JOptionPane.YES_OPTION) {
-                    try {
-                        WhiteboardClient localClient = new WhiteboardClient(username, true);
-                    } catch (RemoteException ex) {
-                        System.err.println("Error creating local client: " + ex.getMessage());
-                        ex.printStackTrace();
-                    }
+            if (response == JOptionPane.YES_OPTION) {
+                try {
+                    WhiteboardClient localClient = new WhiteboardClient(username, true);
+                } catch (RemoteException ex) {
+                    System.err.println("Error creating local client: " + ex.getMessage());
+                    ex.printStackTrace();
                 }
             }
         }
