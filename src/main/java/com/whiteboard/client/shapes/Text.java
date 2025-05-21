@@ -14,9 +14,26 @@ public class Text extends Shape {
 
     @Override
     public void draw(Graphics2D g) {
+        // 保存原始字体
+        Font originalFont = g.getFont();
+
+        // 设置正确的绘制属性
         g.setColor(getDrawColor());
-        g.setFont(font);
+
+        // 确保使用原始的Unicode支持字体
+        Font unicodeFont = new Font("Arial Unicode MS", font.getStyle(), font.getSize());
+        try {
+            g.setFont(unicodeFont);
+        } catch (Exception e) {
+            // 如果无法设置首选字体，使用原始字体
+            g.setFont(font);
+        }
+
+        // 绘制文本
         g.drawString(text, startPoint.x, startPoint.y);
+
+        // 恢复原始字体
+        g.setFont(originalFont);
     }
 
     @Override

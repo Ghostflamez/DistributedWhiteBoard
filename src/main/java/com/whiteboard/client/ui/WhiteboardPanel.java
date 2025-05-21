@@ -34,7 +34,7 @@ public class WhiteboardPanel extends JPanel {
         shapes = new ArrayList<>();
         currentColor = Color.BLACK;
         currentStrokeWidth = 2;
-        currentFont = new Font("Arial", Font.PLAIN, 14);
+        currentFont = new Font("Arial Unicode MS", Font.PLAIN, 14);
 
         // 默认工具为铅笔（自由绘制）
         currentTool = new PencilTool(currentColor, currentStrokeWidth);
@@ -301,10 +301,9 @@ public class WhiteboardPanel extends JPanel {
         return false;
     }
 
-    // 添加处理文本输入的对话框方法
-    // 修改创建文本输入对话框的方法
+    // 修改文本输入对话框方法，使用固定字体确保支持Unicode字符
     private void showTextInputDialog(TextTool textTool) {
-        // 创建文本输入对话框 - 使用更兼容的方式
+        // 创建文本输入对话框
         JDialog dialog = new JDialog();
         dialog.setTitle("Text Tool");
         dialog.setModal(false);
@@ -317,21 +316,36 @@ public class WhiteboardPanel extends JPanel {
             dialog.setLocationRelativeTo(null); // 居中显示
         }
 
-        // 其余代码保持不变
-        // 文本输入区域
+        // 使用固定的多语言支持字体
+        // 这些字体都有很好的Unicode支持
+        final Font UNICODE_FONT = new Font("Arial Unicode MS", Font.PLAIN, 14);
+        final Font FALLBACK_FONT = new Font("Dialog", Font.PLAIN, 14); // 备用字体
+
+        // 文本输入区域 - 确保支持Unicode
         JTextArea textArea = new JTextArea(5, 20);
+        try {
+            textArea.setFont(UNICODE_FONT);
+        } catch (Exception e) {
+            textArea.setFont(FALLBACK_FONT); // 如果首选字体不可用，使用备用字体
+        }
         textArea.setLineWrap(true);
         textArea.setWrapStyleWord(true);
+        textArea.enableInputMethods(true); // 确保启用输入法
+
         JScrollPane scrollPane = new JScrollPane(textArea);
 
-        // 字体大小控制面板
+        // 简化后的字体大小控制面板
         JPanel fontPanel = new JPanel(new BorderLayout(5, 0));
-        fontPanel.add(new JLabel("Font Size:"), BorderLayout.WEST);
+        JPanel fontControls = new JPanel(new FlowLayout(FlowLayout.LEFT));
 
-        // 使用当前字体大小作为默认值
-        JTextField fontSizeField = new JTextField(String.valueOf(textTool.getFont().getSize()));
-        fontSizeField.setPreferredSize(new Dimension(40, 25));
+        // 字体大小控制
+        JLabel fontSizeLabel = new JLabel("Font Size:");
+        JTextField fontSizeField = new JTextField(String.valueOf(textTool.getFont().getSize()), 3);
 
+        fontControls.add(fontSizeLabel);
+        fontControls.add(fontSizeField);
+
+        // 字体大小变化监听
         fontSizeField.addActionListener(new ActionListener() {
             @Override
             public void actionPerformed(ActionEvent e) {
@@ -346,7 +360,7 @@ public class WhiteboardPanel extends JPanel {
             }
         });
 
-        fontPanel.add(fontSizeField, BorderLayout.EAST);
+        fontPanel.add(fontControls, BorderLayout.CENTER);
 
         // 按钮面板
         JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
@@ -419,7 +433,7 @@ public class WhiteboardPanel extends JPanel {
         dialog.setVisible(true);
     }
 
-    // 处理字体大小变更
+    // 修改处理字体大小变更的方法，保持固定字体系列
     private void processFontSizeChange(JTextField fontSizeField, TextTool textTool) {
         try {
             String input = fontSizeField.getText().trim();
@@ -430,8 +444,29 @@ public class WhiteboardPanel extends JPanel {
 
             fontSizeField.setText(String.valueOf(size));
 
-            Font newFont = new Font(textTool.getFont().getFamily(),
-                    textTool.getFont().getStyle(), size);
+            // 使用固定字体系列，仅改变大小
+            Font newFont = new Font("Arial Unicode MS", Font.PLAIN, size);
+            textTool.setFont(newFont);
+            repaint(); // 更新预览
+        } catch (NumberFormatException ex) {
+            // 如果输入无效，恢复为当前字体大小
+            fontSizeField.setText(String.valueOf(textTool.getFont().getSize()));
+        }
+    }
+
+    // 修改处理字体大小变更的方法，添加字体系列参数
+    private void processFontSizeChange(JTextField fontSizeField, TextTool textTool, JComboBox<String> fontFamilyCombo) {
+        try {
+            String input = fontSizeField.getText().trim();
+            double doubleValue = Double.parseDouble(input);
+            int size = (int) Math.round(doubleValue);
+            size = Math.max(1, size);
+            size = Math.min(size, 72); // 最大字体大小为72
+
+            fontSizeField.setText(String.valueOf(size));
+
+            String family = (String) fontFamilyCombo.getSelectedItem();
+            Font newFont = new Font(family, Font.PLAIN, size);
             textTool.setFont(newFont);
             repaint(); // 更新预览
         } catch (NumberFormatException ex) {

@@ -16,7 +16,6 @@ public class ToolPanel extends JToolBar {
     private WhiteboardPanel whiteboardPanel;
     private JSlider strokeWidthSlider;
     private JTextField strokeWidthField;
-    private JTextField fontSizeField; // 字体大小输入框
     private JPanel strokePreviewPanel; // 用于显示线宽预览
 
     public ToolPanel(WhiteboardPanel whiteboardPanel) {
@@ -76,12 +75,6 @@ public class ToolPanel extends JToolBar {
 
         // 线宽控制
         setupStrokeWidthControl();
-
-        // 添加分隔符
-        addSeparator();
-
-        // 字体大小控制
-        setupFontSizeControl();
     }
 
     private void setupStrokeWidthControl() {
@@ -196,75 +189,6 @@ public class ToolPanel extends JToolBar {
         } catch (NumberFormatException ex) {
             // 如果输入无效，恢复为当前滑块值
             strokeWidthField.setText(String.valueOf(strokeWidthSlider.getValue()));
-        }
-    }
-
-    private void setupFontSizeControl() {
-        JPanel fontPanel = new JPanel(new BorderLayout(5, 0));
-        fontPanel.add(new JLabel("Font Size:"), BorderLayout.WEST);
-
-        // 字体大小文本输入框
-        fontSizeField = new JTextField(3);
-        fontSizeField.setText("14"); // 默认字体大小
-        fontSizeField.setHorizontalAlignment(SwingConstants.CENTER);
-
-        // 字体大小文本框事件监听
-        fontSizeField.addActionListener(new ActionListener() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                processFontSizeInput();
-            }
-        });
-
-        fontSizeField.addFocusListener(new FocusAdapter() {
-            @Override
-            public void focusLost(FocusEvent e) {
-                processFontSizeInput();
-            }
-        });
-
-        fontPanel.add(fontSizeField, BorderLayout.CENTER);
-
-        add(fontPanel);
-    }
-
-    private void processFontSizeInput() {
-        try {
-            // 尝试解析输入值
-            String input = fontSizeField.getText().trim();
-
-            // 检查是否包含小数点
-            double doubleValue = Double.parseDouble(input);
-
-            // 四舍五入到整数
-            int size = (int) Math.round(doubleValue);
-
-            // 确保值大于0
-            size = Math.max(1, size);
-
-            // 可选：设置一个合理的最大值
-            size = Math.min(size, 72); // 假设72为最大字体大小
-
-            // 更新字段
-            fontSizeField.setText(String.valueOf(size));
-
-            // 更新字体
-            Font currentFont = new Font("Arial", Font.PLAIN, size);
-            whiteboardPanel.setCurrentFont(currentFont);
-
-            // 如果当前工具是文本工具，更新其字体
-            if (whiteboardPanel.getCurrentTool() instanceof TextTool) {
-                TextTool textTool = (TextTool) whiteboardPanel.getCurrentTool();
-                whiteboardPanel.setCurrentTool(
-                        new TextTool(whiteboardPanel.getCurrentColor(), currentFont));
-            }
-        } catch (NumberFormatException ex) {
-            // 如果输入无效，恢复为默认值或当前值
-            int currentSize = 14; // 默认值
-            if (whiteboardPanel.getCurrentFont() != null) {
-                currentSize = whiteboardPanel.getCurrentFont().getSize();
-            }
-            fontSizeField.setText(String.valueOf(currentSize));
         }
     }
 
@@ -405,11 +329,8 @@ public class ToolPanel extends JToolBar {
     }
 
     public int getCurrentFontSize() {
-        try {
-            return Integer.parseInt(fontSizeField.getText());
-        } catch (NumberFormatException e) {
-            return 14; // 默认值
-        }
+        // 不再使用文本字段，直接返回默认字体大小
+        return 14; // 默认值
     }
 
     public void updatePreview() {
