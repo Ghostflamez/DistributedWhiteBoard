@@ -51,4 +51,8 @@ public class EraserTool implements DrawingTool {
     public void clearShapesToRemove() {
         shapesToRemove.clear();
     }
+
+    public void setEraserSize(int eraserSize) {
+        this.eraserSize = eraserSize;
+    }
 }

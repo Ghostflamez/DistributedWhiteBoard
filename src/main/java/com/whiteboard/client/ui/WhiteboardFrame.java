@@ -23,6 +23,8 @@ public class WhiteboardFrame extends JFrame {
         whiteboardPanel = new WhiteboardPanel();
         toolPanel = new ToolPanel(whiteboardPanel);
         colorPanel = new ColorPanel(whiteboardPanel);
+
+        whiteboardPanel.setToolPanel(toolPanel);
     }
 
     private void setupUI() {
@@ -56,8 +58,8 @@ public class WhiteboardFrame extends JFrame {
     private void handleWindowClosing() {
         int response = JOptionPane.showConfirmDialog(
                 this,
-                "确定要退出白板应用吗？",
-                "确认退出",
+                "Are you sure you want to exit?",
+                "Exit Confirmation",
                 JOptionPane.YES_NO_OPTION,
                 JOptionPane.QUESTION_MESSAGE
         );

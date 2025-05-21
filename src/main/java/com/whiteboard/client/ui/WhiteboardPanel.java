@@ -2,8 +2,8 @@ package com.whiteboard.client.ui;
 
 import com.whiteboard.client.shapes.Shape;
 //test
-import com.whiteboard.client.shapes.Rectangle;
-//test
+//import com.whiteboard.client.shapes.Rectangle;
+
 import com.whiteboard.client.tools.*;
 
 import javax.swing.*;
@@ -18,6 +18,7 @@ public class WhiteboardPanel extends JPanel {
     private Color currentColor;
     private int currentStrokeWidth;
     private Font currentFont;
+    private ToolPanel toolPanel;
 
     public WhiteboardPanel() {
         shapes = new ArrayList<>();
@@ -30,6 +31,9 @@ public class WhiteboardPanel extends JPanel {
 
         setBackground(Color.WHITE);
         setupMouseListeners();
+
+        // 添加透明度测试
+//        testTransparency();
     }
 
     private void setupMouseListeners() {
@@ -173,6 +177,11 @@ public class WhiteboardPanel extends JPanel {
     public void setCurrentColor(Color color) {
         this.currentColor = color;
         updateToolColor();
+
+        // 通知ToolPanel更新预览
+        if (toolPanel != null) {
+            toolPanel.updatePreview();
+        }
     }
 
     // 设置当前线宽
@@ -228,6 +237,32 @@ public class WhiteboardPanel extends JPanel {
     // 清除画布
     public void clearCanvas() {
         shapes.clear();
+
+        // 重置当前工具状态，取消任何正在进行的绘制操作
+        if (currentTool != null) {
+            // 对于不同类型的工具可能需要不同的处理
+            if (currentTool instanceof PencilTool) {
+                // 重新创建一个新的同类型工具，保持颜色和线宽不变
+                currentTool = new PencilTool(currentColor, currentStrokeWidth);
+            } else if (currentTool instanceof LineTool) {
+                currentTool = new LineTool(currentColor, currentStrokeWidth);
+            } else if (currentTool instanceof RectangleTool) {
+                currentTool = new RectangleTool(currentColor, currentStrokeWidth);
+            } else if (currentTool instanceof OvalTool) {
+                currentTool = new OvalTool(currentColor, currentStrokeWidth);
+            } else if (currentTool instanceof TriangleTool) {
+                currentTool = new TriangleTool(currentColor, currentStrokeWidth);
+            } else if (currentTool instanceof TextTool) {
+                Font currentFont = new Font("Arial", Font.PLAIN,
+                        toolPanel != null ? toolPanel.getCurrentFontSize() : 14);
+                currentTool = new TextTool(currentColor, currentFont);
+            } else if (currentTool instanceof EraserTool) {
+                EraserTool eraserTool = (EraserTool) currentTool;
+                int size = eraserTool.getEraserSize();
+                currentTool = new EraserTool(size);
+            }
+        }
+
         repaint();
     }
 
@@ -240,6 +275,47 @@ public class WhiteboardPanel extends JPanel {
     public void setShapes(List<Shape> shapes) {
         this.shapes = new ArrayList<>(shapes);
         repaint();
+    }
+
+    public void setToolPanel(ToolPanel toolPanel) {
+        this.toolPanel = toolPanel;
+    }
+
+    /*
+     * test methods
+     */
+
+    // 临时测试透明度功能，可在初始化后调用或通过特定按键触发
+//    private void testTransparency() {
+//        // 创建两个重叠的形状
+//        Point p1 = new Point(100, 100);
+//        Point p2 = new Point(300, 300);
+//
+//        Rectangle rect = new Rectangle(p1, p2, Color.RED, 2);
+//        shapes.add(rect);
+//
+//        Point p3 = new Point(200, 100);
+//        Point p4 = new Point(400, 300);
+//
+//        Rectangle rect2 = new Rectangle(p3, p4, Color.BLUE, 2);
+//        // 设置临时透明度为半透明
+//        rect2.setTempAlpha(128);
+//        shapes.add(rect2);
+//
+//        repaint();
+//    }
+
+    // getters for current tool and color
+    public DrawingTool getCurrentTool() {
+        return currentTool;
+    }
+
+    public Color getCurrentColor() {
+        return currentColor;
+    }
+
+    public Font getCurrentFont() {
+        return currentFont;
     }
 
 }

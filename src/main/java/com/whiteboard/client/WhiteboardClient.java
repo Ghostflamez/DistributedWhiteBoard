@@ -18,7 +18,7 @@ public class WhiteboardClient {
     private void initialize() {
         // 确保在EDT线程中创建UI
         SwingUtilities.invokeLater(() -> {
-            String title = "分布式白板 - " + username + (isManager ? " (管理员)" : "");
+            String title = "Distributed whiteboard - " + username + (isManager ? " (Manager)" : "");
             frame = new WhiteboardFrame(title, isManager);
             frame.setVisible(true);
         });
