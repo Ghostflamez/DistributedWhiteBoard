@@ -5,6 +5,8 @@ import javax.swing.*;
 import javax.swing.event.ChangeEvent;
 import javax.swing.event.ChangeListener;
 import java.awt.*;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.event.FocusAdapter;
@@ -62,10 +64,7 @@ public class ToolPanel extends JToolBar {
         add(textButton);
 
         // 橡皮擦按钮
-        JButton eraserButton = new JButton("Eraser");
-        eraserButton.addActionListener(e ->
-                whiteboardPanel.setCurrentTool(new EraserTool(20)));
-        add(eraserButton);
+        setupEraserButton();
 
         // 清除按钮
         JButton clearButton = new JButton("Clear All");
@@ -295,10 +294,109 @@ public class ToolPanel extends JToolBar {
                 whiteboardPanel.setCurrentTool(
                         new TriangleTool(whiteboardPanel.getCurrentColor(), width));
             } else if (currentTool instanceof EraserTool) {
-                EraserTool eraserTool = (EraserTool) currentTool;
-                eraserTool.setEraserSize(width * 5); // 橡皮擦尺寸为线宽的5倍
+                // 更新橡皮擦大小，保持当前模式
+                EraserTool oldEraserTool = (EraserTool) currentTool;
+                EraserTool newEraserTool = new EraserTool(Math.toIntExact(Math.round(width * 1.25))); // 橡皮擦尺寸为线宽的1.25倍
+                // 设置橡皮擦模式
+                newEraserTool.setMode(oldEraserTool.getMode());
+                whiteboardPanel.setCurrentTool(newEraserTool);
+                // 如果当前点存在，保留它
+                if (oldEraserTool.getCurrentPoint() != null) {
+                    newEraserTool.setCurrentPoint(oldEraserTool.getCurrentPoint());
+                }
             }
         }
+        // 更新预览
+        strokePreviewPanel.repaint();
+    }
+
+    // 在ToolPanel类中添加橡皮擦控制
+    private void setupEraserButton() {
+        JButton eraserButton = new JButton("ERASER");
+
+        // 创建橡皮擦选项面板
+        JPopupMenu eraserMenu = new JPopupMenu();
+        JPanel eraserPanel = new JPanel(new BorderLayout(5, 5));
+        eraserPanel.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
+
+        // 橡皮擦模式单选按钮
+        JPanel modePanel = new JPanel(new GridLayout(2, 1, 0, 5));
+        modePanel.setBorder(BorderFactory.createTitledBorder("Eraser Mode"));
+
+        ButtonGroup modeGroup = new ButtonGroup();
+        JRadioButton objectModeButton = new JRadioButton(EraserTool.EraseMode.OBJECT.getDisplayName());
+        JRadioButton freeModeButton = new JRadioButton(EraserTool.EraseMode.FREE.getDisplayName());
+
+        // 禁用对象擦除模式按钮
+        objectModeButton.setEnabled(false);
+
+        freeModeButton.setSelected(true); // 默认选中自由擦除模式
+
+        modeGroup.add(objectModeButton);
+        modeGroup.add(freeModeButton);
+
+        modePanel.add(objectModeButton);
+        modePanel.add(freeModeButton);
+
+        // 应用按钮
+        JButton applyButton = new JButton("Apply");
+
+        // 事件监听
+        applyButton.addActionListener(new ActionListener() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                // 创建橡皮擦并设置模式
+                createEraserWithCurrentSettings(
+                        objectModeButton.isSelected() ?
+                                EraserTool.EraseMode.OBJECT : EraserTool.EraseMode.FREE);
+
+                // 关闭菜单
+                eraserMenu.setVisible(false);
+            }
+        });
+
+        // 组装面板
+        eraserPanel.add(modePanel, BorderLayout.CENTER);
+        eraserPanel.add(applyButton, BorderLayout.SOUTH);
+
+        eraserMenu.add(eraserPanel);
+
+        // 左键点击 - 快速使用默认模式橡皮擦
+        eraserButton.addActionListener(new ActionListener() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                // 使用对象擦除模式
+                createEraserWithCurrentSettings(EraserTool.EraseMode.FREE);
+            }
+        });
+
+        // 右键点击 - 显示模式选择菜单
+        eraserButton.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                if (e.isPopupTrigger() || e.getButton() == MouseEvent.BUTTON3) {
+                    eraserMenu.show(eraserButton, e.getX(), e.getY());
+                }
+            }
+
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                if (e.isPopupTrigger() || e.getButton() == MouseEvent.BUTTON3) {
+                    eraserMenu.show(eraserButton, e.getX(), e.getY());
+                }
+            }
+        });
+
+        add(eraserButton);
+    }
+
+    // 辅助方法：使用当前笔刷大小创建橡皮擦
+    private void createEraserWithCurrentSettings(EraserTool.EraseMode mode) {
+        int currentSize = getCurrentStrokeWidth();
+        int eraserSize = (int) Math.round(currentSize * 1.25); // 橡皮擦尺寸为笔刷大小的1.25倍
+        EraserTool eraserTool = new EraserTool(eraserSize);
+        eraserTool.setMode(mode);
+        whiteboardPanel.setCurrentTool(eraserTool);
     }
 
 

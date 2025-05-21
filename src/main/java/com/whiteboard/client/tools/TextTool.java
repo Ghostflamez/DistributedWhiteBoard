@@ -10,37 +10,82 @@ public class TextTool implements DrawingTool {
     private Text currentText;
     private Color color;
     private Font font;
-    private String text;
+    private String text = "";
+    private Point position;
+    private boolean isEditing = false;
 
     public TextTool(Color color, Font font) {
         this.color = color;
         this.font = font;
-        this.text = "";
     }
 
     public void setText(String text) {
         this.text = text;
+        // 如果当前正在编辑，更新预览文本
+        if (isEditing && position != null) {
+            currentText = new Text(position, text, color, font);
+        }
+    }
+
+    public void setPosition(Point p) {
+        this.position = p;
+    }
+
+    public void startEditing() {
+        isEditing = true;
+        if (position != null) {
+            // 创建预览文本
+            currentText = new Text(position, text, color, font);
+        }
+    }
+
+    public void finishEditing() {
+        isEditing = false;
+        // 如果文本为空或只有空格，不创建文本对象
+        if (text != null && !text.trim().isEmpty()) {
+            currentText = new Text(position, text, color, font);
+        } else {
+            currentText = null;
+        }
+    }
+
+    public boolean isEditing() {
+        return isEditing;
     }
 
     @Override
     public void mousePressed(Point p) {
-        if (!text.isEmpty()) {
-            currentText = new Text(p, text, color, font);
-        }
+        position = p;
+        startEditing();
     }
 
     @Override
     public void mouseDragged(Point p) {
-        // 文本工具拖动时不做任何操作
+        // 文本工具不处理拖动
     }
 
     @Override
     public void mouseReleased(Point p) {
-        // 文本工具释放时不做任何操作
+        // 文本工具不处理释放
     }
 
     @Override
     public Shape getCreatedShape() {
         return currentText;
+    }
+
+    public Font getFont() {
+        return font;
+    }
+
+    public void setFont(Font font) {
+        this.font = font;
+        if (isEditing && position != null) {
+            currentText = new Text(position, text, color, font);
+        }
+    }
+
+    public String getText() {
+        return text;
     }
 }

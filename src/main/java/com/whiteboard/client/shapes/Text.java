@@ -32,4 +32,8 @@ public class Text extends Shape {
     public String getText() {
         return text;
     }
+
+    public Font getFont() {
+        return font;
+    }
 }
