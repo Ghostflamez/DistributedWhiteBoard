@@ -1,0 +1,167 @@
+# Java compiled files
+*.class
+*.jar
+*.war
+*.nar
+*.ear
+*.zip
+*.tar.gz
+*.rar
+
+# Java package files
+*.jar
+!gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.jar
+
+# Maven
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.properties
+
+# IntelliJ IDEA
+.idea/
+*.iws
+*.iml
+*.ipr
+out/
+
+# Eclipse
+.metadata
+bin/
+tmp/
+*.tmp
+*.bak
+*.swp
+*~.nib
+local.properties
+.settings/
+.loadpath
+.recommenders
+.project
+.externalToolBuilders/
+*.launch
+.classpath
+.factorypath
+.buildpath
+.target
+
+# NetBeans
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+
+# VS Code
+.vscode/
+
+# System files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Log files
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+*~
+
+# Build and compilation artifacts
+build/
+dist/
+*.o
+*.so
+*.dll
+
+# IDE specific files
+*.swp
+*.swo
+*~
+
+# OS generated files
+Desktop.ini
+$RECYCLE.BIN/
+
+# Java specific
+hs_err_pid*
+replay_pid*
+
+# Surefire reports
+**/surefire-reports/
+**/failsafe-reports/
+
+# Test output
+test-output/
+
+# Application specific
+*.whiteboard
+*.wbd
+
+# Backup files
+*.bak
+*.backup
+
+# Generated documentation
+docs/javadoc/
+
+# Configuration files that might contain sensitive information
+config.properties
+application-local.properties
+
+# Database files
+*.db
+*.sqlite
+
+# Cache directories
+.cache/
+
+# Node modules (if using any JS tools)
+node_modules/
+
+# Python compiled files (if using any Python tools)
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Gradle
+.gradle/
+gradle-app.setting
+
+# CMake
+CMakeLists.txt.user
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+Testing/
+Makefile
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+CTestTestfile.cmake
+_deps
+
+# JetBrains IDEs plugin directory
+.idea_modules/
+
+# JIRA plugin
+atlassian-ide-plugin.xml
+
+# Crashlytics plugin (for Android Studio and IntelliJ)
+com_crashlytics_export_strings.xml
+crashlytics.properties
+crashlytics-build.properties
+fabric.properties
