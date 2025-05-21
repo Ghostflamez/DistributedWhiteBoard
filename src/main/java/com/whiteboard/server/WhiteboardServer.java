@@ -41,14 +41,24 @@ public class WhiteboardServer implements IWhiteboardServer {
         userManager = new UserManager();
         clientCallbacks = new ConcurrentHashMap<>();
         regionLocks = new ConcurrentHashMap<>();
+
+        // 添加关闭钩子
+        addShutdownHook();
     }
 
     // 用户管理方法实现
-    @Override
-    public String connectUser(String username) throws RemoteException {
-        logger.info("User connecting: " + username);
-        return userManager.connectUser(username);
+@Override
+public String connectUser(String username) throws RemoteException {
+    logger.info("User connecting: " + username);
+
+    // 如果已有管理员且尝试作为管理员登录，则拒绝
+    if (userManager.getManagerId() != null && userManager.getConnectedUsernames().isEmpty()) {
+        logger.warning("Second manager attempted to connect: " + username);
+        return null; // 拒绝连接
     }
+
+    return userManager.connectUser(username);
+}
 
     @Override
     public boolean approveUser(String username, String managerId) throws RemoteException {
@@ -67,6 +77,7 @@ public class WhiteboardServer implements IWhiteboardServer {
     @Override
     public void disconnectUser(String sessionId) throws RemoteException {
         logger.info("User disconnecting, session: " + sessionId);
+
         User user = userManager.getUserBySessionId(sessionId);
         if (user != null) {
             if (user.isManager()) {
@@ -363,6 +374,109 @@ public class WhiteboardServer implements IWhiteboardServer {
         return regionX + ":" + regionY;
     }
 
+    /**
+     * 处理用户加入请求
+     */
+    @Override
+    public void requestJoin(String username, String sessionId) throws RemoteException {
+        logger.info("Join request from user: " + username + ", session: " + sessionId);
+
+        // 更新用户活动时间
+        userManager.updateUserActivity(sessionId);
+
+        // 获取用户UID
+        String uid = userManager.getUidBySessionId(sessionId);
+        if (uid == null) {
+            logger.warning("Session not found: " + sessionId);
+            return;
+        }
+
+        // 检查是否已批准
+        if (userManager.isApproved(uid)) {
+            // 已批准则直接通知用户
+            IWhiteboardClient client = clientCallbacks.get(sessionId);
+            if (client != null) {
+                try {
+                    client.notifyManagerDecision(true);
+                } catch (RemoteException e) {
+                    logger.warning("Error notifying approved user: " + e.getMessage());
+                }
+            }
+            return;
+        }
+
+        // 如果未批准且不在等待列表，则通知管理员
+        if (!userManager.isPendingUser(sessionId)) {
+            logger.warning("User not in pending list: " + sessionId);
+            return;
+        }
+
+        // 通知管理员
+        notifyManagerAboutPendingUser(username);
+    }
+
+    /**
+     * 通知管理员有新用户请求加入
+     */
+    private void notifyManagerAboutPendingUser(String username) {
+        String managerId = userManager.getManagerId();
+        if (managerId != null) {
+            IWhiteboardClient managerClient = clientCallbacks.get(managerId);
+            if (managerClient != null) {
+                try {
+                    // 检查用户是否在线
+                    User user = userManager.getUserByUsername(username);
+                    boolean isOnline = (user != null &&
+                            (System.currentTimeMillis() - user.getLastActivity()) <= 10000);
+
+                    managerClient.notifyPendingJoinRequest(username, isOnline);
+                    logger.info("Notified manager about pending user: " + username);
+                } catch (RemoteException e) {
+                    logger.warning("Failed to notify manager about pending user: " + e.getMessage());
+                }
+            }
+        }
+    }
+
+    /**
+     * 拒绝用户加入请求
+     */
+    @Override
+    public void rejectUser(String username, String managerId) throws RemoteException {
+        logger.info("Manager " + managerId + " rejecting user: " + username);
+
+        if (!userManager.isManager(managerId)) {
+            logger.warning("Non-manager attempted to reject user: " + username);
+            return;
+        }
+
+        // 查找用户会话
+        User user = userManager.getUserByUsername(username);
+        if (user != null && userManager.isPendingUser(user.getSessionId())) {
+            // 通知用户被拒绝
+            IWhiteboardClient client = clientCallbacks.get(user.getSessionId());
+            if (client != null) {
+                try {
+                    client.notifyManagerDecision(false);
+                    logger.info("Notified user of rejection: " + username);
+                } catch (RemoteException e) {
+                    logger.warning("Error notifying rejected user: " + e.getMessage());
+                }
+            }
+
+            // 从等待列表移除用户
+            userManager.removeUser(user.getSessionId());
+        }
+    }
+
+    /**
+     * 更新用户活动时间
+     */
+    @Override
+    public void updateUserActivity(String sessionId) throws RemoteException {
+        userManager.updateUserActivity(sessionId);
+    }
+
     // 启动服务器
     public static void main(String[] args) {
         try {
@@ -391,5 +505,29 @@ public class WhiteboardServer implements IWhiteboardServer {
     @Override
     public boolean isManager(String sessionId) throws RemoteException {
         return userManager.isManager(sessionId);
+    }
+
+    /**
+     * 在服务器关闭前通知所有客户端
+     */
+    private void addShutdownHook() {
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            notifyServerShutdown();
+        }));
+    }
+
+    /**
+     * 通知所有客户端服务器将要关闭
+     */
+    private void notifyServerShutdown() {
+        logger.info("Server shutting down, notifying all clients");
+
+        for (IWhiteboardClient client : clientCallbacks.values()) {
+            try {
+                client.notifyServerDisconnected();
+            } catch (RemoteException e) {
+                // 忽略关闭时的异常
+            }
+        }
     }
 }

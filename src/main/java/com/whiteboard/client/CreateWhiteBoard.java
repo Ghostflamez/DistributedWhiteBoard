@@ -1,4 +1,3 @@
-// CreateWhiteBoard.java
 package com.whiteboard.client;
 
 import javax.swing.*;
@@ -7,7 +6,7 @@ import java.rmi.RemoteException;
 public class CreateWhiteBoard {
     public static void main(String[] args) {
         if (args.length < 3) {
-            System.out.println("Usage: java CreateWhiteBoard <serverIPAddress> <serverPort> <username>");
+            System.err.println("Usage: java CreateWhiteBoard <serverIPAddress> <serverPort> <username>");
             System.out.println("Running in local mode as manager");
 
             try {

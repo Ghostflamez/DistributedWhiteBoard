@@ -27,7 +27,11 @@ public class ServerStarter {
             // 创建注册表
             int port = 1099; // 默认RMI端口
             if (args.length > 0) {
-                port = Integer.parseInt(args[0]);
+                try {
+                    port = Integer.parseInt(args[0]);
+                } catch (NumberFormatException e) {
+                    logger.warning("Invalid port number: " + args[0] + ", using default port 1099");
+                }
             }
 
             Registry registry = LocateRegistry.createRegistry(port);

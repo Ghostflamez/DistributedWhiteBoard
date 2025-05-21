@@ -16,6 +16,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.logging.Logger;
+import java.util.Timer;
+import java.util.TimerTask;
+
 
 public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboardClient, Serializable {
     private static final Logger logger = Logger.getLogger(WhiteboardClient.class.getName());
@@ -28,6 +31,9 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
     private boolean isConnected = false;
     private String currentFilename = null;
     private volatile boolean uiInitialized = false;
+    private Timer heartbeatTimer;
+    private Timer joinRequestTimer;
+    private boolean isApproved = false;
 
     // 缓存未处理的更新
     private final List<Shape> pendingShapes = new ArrayList<>();
@@ -95,9 +101,29 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
             // 连接用户
             sessionId = server.connectUser(username);
 
+            // 如果返回null，表示连接被拒绝（可能是第二管理员）
+            if (sessionId == null) {
+                JOptionPane.showMessageDialog(null,
+                        "Connection rejected: Another manager is already connected.",
+                        "Connection Error",
+                        JOptionPane.ERROR_MESSAGE);
+                isConnected = false;
+                return;
+            }
+
             // 确定是否为管理员
             isManager = sessionId != null && server.isManager(sessionId);
             isConnected = true;
+
+            // 启动心跳
+            startHeartbeat();
+
+            // 如果不是管理员，启动加入请求
+            if (!isManager) {
+                startJoinRequestTimer();
+            } else {
+                isApproved = true; // 管理员自动批准
+            }
 
             logger.info("Connected to server as " + (isManager ? "manager" : "regular user"));
         } catch (RemoteException | NotBoundException e) {
@@ -299,6 +325,8 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
 
     @Override
     public void notifyManagerDecision(boolean approved) throws RemoteException {
+        this.isApproved = approved;
+
         if (uiInitialized && frame != null) {
             SwingUtilities.invokeLater(() -> {
                 if (approved) {
@@ -311,7 +339,15 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
                             "Your request to join has been rejected",
                             "Request Rejected",
                             JOptionPane.WARNING_MESSAGE);
-                    System.exit(0);
+
+                    // 5秒后关闭应用
+                    Timer closeTimer = new Timer();
+                    closeTimer.schedule(new TimerTask() {
+                        @Override
+                        public void run() {
+                            System.exit(0);
+                        }
+                    }, 5000);
                 }
             });
         } else {
@@ -532,5 +568,142 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
      */
     public boolean hasFilename() {
         return currentFilename != null;
+    }
+
+    /**
+     * 初始化心跳机制
+     */
+    private void startHeartbeat() {
+        if (heartbeatTimer != null) {
+            heartbeatTimer.cancel();
+        }
+
+        heartbeatTimer = new Timer(true);
+        heartbeatTimer.scheduleAtFixedRate(new TimerTask() {
+            @Override
+            public void run() {
+                if (isConnected) {
+                    try {
+                        // 发送心跳
+                        server.updateUserActivity(sessionId);
+                    } catch (RemoteException e) {
+                        logger.warning("Heartbeat failed: " + e.getMessage());
+                        handleConnectionError(e);
+                    }
+                }
+            }
+        }, 5000, 5000); // 每5秒发送一次心跳
+    }
+
+    /**
+     * 初始化加入请求定时器
+     */
+    private void startJoinRequestTimer() {
+        if (joinRequestTimer != null) {
+            joinRequestTimer.cancel();
+        }
+
+        joinRequestTimer = new Timer(true);
+        joinRequestTimer.scheduleAtFixedRate(new TimerTask() {
+            @Override
+            public void run() {
+                if (isConnected && !isApproved && !isManager) {
+                    sendJoinRequest();
+                } else if (isApproved || isManager) {
+                    joinRequestTimer.cancel();
+                }
+            }
+        }, 0, 5000); // 每5秒发送一次请求
+    }
+
+    /**
+     * 发送加入请求
+     */
+    private void sendJoinRequest() {
+        if (isConnected && server != null) {
+            try {
+                // 发送加入请求
+                server.requestJoin(username, sessionId);
+                logger.info("Sent join request");
+            } catch (RemoteException e) {
+                logger.warning("Error sending join request: " + e.getMessage());
+                handleConnectionError(e);
+            }
+        }
+    }
+
+    /**
+     * 实现新增的通知方法：待处理的加入请求
+     */
+    @Override
+    public void notifyPendingJoinRequest(String username, boolean isOnline) throws RemoteException {
+        if (uiInitialized && frame != null && isManager) {
+            SwingUtilities.invokeLater(() -> {
+                frame.showJoinRequest(username, isOnline);
+            });
+        }
+    }
+
+    /**
+     * 实现新增的通知方法：服务器断开连接
+     */
+    @Override
+    public void notifyServerDisconnected() throws RemoteException {
+        if (uiInitialized && frame != null) {
+            SwingUtilities.invokeLater(() -> {
+                JOptionPane.showMessageDialog(frame,
+                        "Lost connection to server. The application will close in 5 seconds.",
+                        "Server Disconnected",
+                        JOptionPane.ERROR_MESSAGE);
+
+                // 5秒后关闭应用
+                Timer closeTimer = new Timer();
+                closeTimer.schedule(new TimerTask() {
+                    @Override
+                    public void run() {
+                        System.exit(0);
+                    }
+                }, 5000);
+            });
+        }
+    }
+
+    /**
+     * 实现心跳响应方法
+     */
+    @Override
+    public void heartbeat() throws RemoteException {
+        // 心跳响应，无需具体操作
+    }
+
+    /**
+     * 批准用户加入
+     */
+    public boolean approveUser(String username) {
+        if (isConnected && isManager) {
+            try {
+                return server.approveUser(username, sessionId);
+            } catch (RemoteException e) {
+                logger.warning("Error approving user: " + e.getMessage());
+                handleConnectionError(e);
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 拒绝用户加入
+     */
+    public boolean rejectUser(String username) {
+        if (isConnected && isManager) {
+            try {
+                server.rejectUser(username, sessionId);
+                return true;
+            } catch (RemoteException e) {
+                logger.warning("Error rejecting user: " + e.getMessage());
+                handleConnectionError(e);
+            }
+        }
+        return false;
     }
 }

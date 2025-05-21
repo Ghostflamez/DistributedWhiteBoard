@@ -6,6 +6,10 @@ import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.util.List;
 import com.whiteboard.client.WhiteboardClient;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Timer;
+import java.util.TimerTask;
 
 public class WhiteboardFrame extends JFrame {
     private WhiteboardPanel whiteboardPanel;
@@ -24,6 +28,7 @@ public class WhiteboardFrame extends JFrame {
     // 新添加的颜色选择器
     private ColorSelectionPanel colorSelectionPanel; // 新添加
     private boolean useNewColorSelector = true; // 控制开关
+    private Map<String, JDialog> pendingUserDialogs = new HashMap<>();
 
     public WhiteboardFrame(String title, boolean isManager, WhiteboardClient client) {
         super(title);
@@ -347,4 +352,148 @@ public class WhiteboardFrame extends JFrame {
     public WhiteboardPanel getWhiteboardPanel() {
         return whiteboardPanel;
     }
+
+    /**
+     * 显示用户加入请求对话框
+     */
+    public void showJoinRequest(String username, boolean isOnline) {
+        SwingUtilities.invokeLater(() -> {
+            // 检查是否已有该用户的对话框
+            JDialog existingDialog = pendingUserDialogs.get(username);
+            if (existingDialog != null && existingDialog.isVisible()) {
+                // 更新现有对话框状态
+                updateJoinRequestDialog(existingDialog, username, isOnline);
+                return;
+            }
+
+            // 创建新的对话框
+            JDialog dialog = new JDialog(this, "Join Request", false);
+            pendingUserDialogs.put(username, dialog);
+
+            JPanel panel = new JPanel(new BorderLayout(10, 10));
+            panel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+
+            JLabel messageLabel = new JLabel("User '" + username + "' wants to join.");
+            JLabel statusLabel = new JLabel("Status: " + (isOnline ? "waiting" : "disconnected"));
+
+            JPanel buttonsPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+            JButton approveButton = new JButton("Approve");
+            JButton rejectButton = new JButton("Reject");
+
+            approveButton.addActionListener(e -> {
+                if (client != null) {
+                    if (client.approveUser(username)) {
+                        JOptionPane.showMessageDialog(this,
+                                "User '" + username + "' has been approved.",
+                                "User Approved",
+                                JOptionPane.INFORMATION_MESSAGE);
+                    } else {
+                        JOptionPane.showMessageDialog(this,
+                                "Failed to approve user '" + username + "'.",
+                                "Approval Failed",
+                                JOptionPane.WARNING_MESSAGE);
+                    }
+                }
+                dialog.dispose();
+                pendingUserDialogs.remove(username);
+            });
+
+            rejectButton.addActionListener(e -> {
+                if (client != null) {
+                    if (client.rejectUser(username)) {
+                        JOptionPane.showMessageDialog(this,
+                                "User '" + username + "' has been rejected.",
+                                "User Rejected",
+                                JOptionPane.INFORMATION_MESSAGE);
+                    } else {
+                        JOptionPane.showMessageDialog(this,
+                                "Failed to reject user '" + username + "'.",
+                                "Rejection Failed",
+                                JOptionPane.WARNING_MESSAGE);
+                    }
+                }
+                dialog.dispose();
+                pendingUserDialogs.remove(username);
+            });
+
+            buttonsPanel.add(approveButton);
+            buttonsPanel.add(rejectButton);
+
+            JPanel infoPanel = new JPanel(new GridLayout(2, 1, 5, 5));
+            infoPanel.add(messageLabel);
+            infoPanel.add(statusLabel);
+
+            panel.add(infoPanel, BorderLayout.CENTER);
+            panel.add(buttonsPanel, BorderLayout.SOUTH);
+
+            dialog.add(panel);
+            dialog.pack();
+            dialog.setLocationRelativeTo(this);
+            dialog.setVisible(true);
+
+            // 如果用户已断开连接，添加自动关闭计时器
+            if (!isOnline) {
+                startAutoCloseTimer(dialog, statusLabel, username);
+            }
+        });
+    }
+
+    /**
+     * 更新加入请求对话框状态
+     */
+    private void updateJoinRequestDialog(JDialog dialog, String username, boolean isOnline) {
+        // 查找状态标签并更新
+        Container contentPane = dialog.getContentPane();
+        if (contentPane.getComponentCount() > 0) {
+            Component comp = contentPane.getComponent(0);
+            if (comp instanceof JPanel) {
+                JPanel mainPanel = (JPanel) comp;
+                for (Component subComp : mainPanel.getComponents()) {
+                    if (subComp instanceof JPanel) {
+                        JPanel infoPanel = (JPanel) subComp;
+                        for (Component infoComp : infoPanel.getComponents()) {
+                            if (infoComp instanceof JLabel) {
+                                JLabel label = (JLabel) infoComp;
+                                if (label.getText().startsWith("Status:")) {
+                                    label.setText("Status: " + (isOnline ? "waiting" : "disconnected"));
+
+                                    // 如果用户已断开连接，添加自动关闭计时器
+                                    if (!isOnline) {
+                                        startAutoCloseTimer(dialog, label, username);
+                                    }
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * 启动对话框自动关闭计时器
+     */
+    private void startAutoCloseTimer(JDialog dialog, JLabel statusLabel, String username) {
+        Timer timer = new Timer(true);
+        final int[] secondsLeft = {5};
+
+        timer.scheduleAtFixedRate(new TimerTask() {
+            @Override
+            public void run() {
+                SwingUtilities.invokeLater(() -> {
+                    secondsLeft[0]--;
+                    statusLabel.setText("Status: disconnected (close after " + secondsLeft[0] + "s)");
+
+                    if (secondsLeft[0] <= 0) {
+                        timer.cancel();
+                        dialog.dispose();
+                        pendingUserDialogs.remove(username);
+                    }
+                });
+            }
+        }, 1000, 1000);
+    }
+
+
 }
