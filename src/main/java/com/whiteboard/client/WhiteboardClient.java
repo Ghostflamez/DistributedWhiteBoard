@@ -12,24 +12,42 @@ import java.rmi.RemoteException;
 import java.rmi.registry.LocateRegistry;
 import java.rmi.registry.Registry;
 import java.rmi.server.UnicastRemoteObject;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.logging.Logger;
-
-/**
- * WhiteboardClient类实现了IWhiteboardClient接口，负责与服务器进行通信并更新UI。
- * 它可以在本地模式下临时运行，也可以连接到远程服务器。
- */
 
 public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboardClient, Serializable {
     private static final Logger logger = Logger.getLogger(WhiteboardClient.class.getName());
 
-    private WhiteboardFrame frame;
+    private WhiteboardFrame frame = null;
     private IWhiteboardServer server;
     private String username;
     private String sessionId;
     private boolean isManager;
     private boolean isConnected = false;
     private String currentFilename = null;
+    private volatile boolean uiInitialized = false;
+
+    // 缓存未处理的更新
+    private final List<Shape> pendingShapes = new ArrayList<>();
+    private final List<String> pendingShapeRemovals = new ArrayList<>();
+    private List<String> pendingUserList = null;
+    private final List<ChatMessage> pendingMessages = new ArrayList<>();
+    private Boolean pendingManagerDecision = null;
+    private boolean pendingManagerLeft = false;
+    private boolean pendingKicked = false;
+    private boolean pendingClearCanvas = false;
+
+    private static class ChatMessage {
+        final String sender;
+        final String message;
+
+        ChatMessage(String sender, String message) {
+            this.sender = sender;
+            this.message = message;
+        }
+    }
 
     /**
      * 本地模式构造函数（不连接服务器）
@@ -37,6 +55,8 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
     public WhiteboardClient(String username, boolean isManager) throws RemoteException {
         this.username = username;
         this.isManager = isManager;
+
+        // 初始化UI
         initializeUI();
     }
 
@@ -53,18 +73,8 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
             // 初始化UI
             initializeUI();
 
-            // 如果已连接服务器，注册客户端回调
-            if (isConnected) {
-                server.registerClient(sessionId, this);
+            // 注意：注册回调会在UI初始化完成后通过事件处理
 
-                // 检索并显示当前的所有形状
-                List<Shape> shapes = server.getAllShapes();
-                SwingUtilities.invokeLater(() -> {
-                    for (Shape shape : shapes) {
-                        frame.getWhiteboardPanel().addShape(shape);
-                    }
-                });
-            }
         } catch (Exception e) {
             logger.severe("Error initializing client: " + e.getMessage());
             throw new RemoteException("Failed to initialize client", e);
@@ -87,9 +97,6 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
 
             // 确定是否为管理员
             isManager = sessionId != null && server.isManager(sessionId);
-
-            // 重要：注册回调
-            server.registerClient(sessionId, this);
             isConnected = true;
 
             logger.info("Connected to server as " + (isManager ? "manager" : "regular user"));
@@ -110,7 +117,6 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
         SwingUtilities.invokeLater(() -> {
             String title = "Distributed Whiteboard - " + username + (isManager ? " (Manager)" : "");
             frame = new WhiteboardFrame(title, isManager, this);
-            frame.setVisible(true);
 
             // 设置白板面板的绘图事件监听器
             frame.getWhiteboardPanel().setDrawingListener(shape -> {
@@ -122,8 +128,252 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
                     }
                 }
             });
+
+            frame.setVisible(true);
+
+            // 标记UI已初始化
+            uiInitialized = true;
+
+            // 注册客户端回调
+            if (isConnected) {
+                try {
+                    server.registerClient(sessionId, this);
+
+                    // 检索并显示当前的所有形状
+                    List<Shape> shapes = server.getAllShapes();
+                    for (Shape shape : shapes) {
+                        frame.getWhiteboardPanel().addShape(shape);
+                    }
+                } catch (RemoteException e) {
+                    logger.warning("Error registering client or getting shapes: " + e.getMessage());
+                }
+            }
+
+            // 处理所有挂起的更新
+            processPendingUpdates();
         });
     }
+
+    /**
+     * 处理挂起的更新
+     */
+    private void processPendingUpdates() {
+        if (!uiInitialized || frame == null) {
+            return;
+        }
+
+        // 处理挂起的形状
+        synchronized (pendingShapes) {
+            for (Shape shape : pendingShapes) {
+                frame.getWhiteboardPanel().addShape(shape);
+            }
+            pendingShapes.clear();
+        }
+
+        // 处理挂起的形状移除
+        synchronized (pendingShapeRemovals) {
+            for (String shapeId : pendingShapeRemovals) {
+                frame.getWhiteboardPanel().removeShape(shapeId);
+            }
+            pendingShapeRemovals.clear();
+        }
+
+        // 处理挂起的用户列表
+        if (pendingUserList != null) {
+            frame.updateUserList(pendingUserList);
+            pendingUserList = null;
+        }
+
+        // 处理挂起的聊天消息
+        synchronized (pendingMessages) {
+            for (ChatMessage msg : pendingMessages) {
+                frame.addChatMessage(msg.sender, msg.message);
+            }
+            pendingMessages.clear();
+        }
+
+        // 处理挂起的管理员决定
+        if (pendingManagerDecision != null) {
+            boolean approved = pendingManagerDecision;
+            pendingManagerDecision = null;
+
+            if (approved) {
+                JOptionPane.showMessageDialog(frame,
+                        "Your request to join has been approved",
+                        "Request Approved",
+                        JOptionPane.INFORMATION_MESSAGE);
+            } else {
+                JOptionPane.showMessageDialog(frame,
+                        "Your request to join has been rejected",
+                        "Request Rejected",
+                        JOptionPane.WARNING_MESSAGE);
+                System.exit(0);
+            }
+        }
+
+        // 处理挂起的管理员离开
+        if (pendingManagerLeft) {
+            pendingManagerLeft = false;
+            JOptionPane.showMessageDialog(frame,
+                    "The manager has left the session. The application will now close.",
+                    "Session Ended",
+                    JOptionPane.WARNING_MESSAGE);
+            System.exit(0);
+        }
+
+        // 处理挂起的踢出
+        if (pendingKicked) {
+            pendingKicked = false;
+            JOptionPane.showMessageDialog(frame,
+                    "You have been kicked out by the manager.",
+                    "Kicked Out",
+                    JOptionPane.WARNING_MESSAGE);
+            System.exit(0);
+        }
+
+        // 处理挂起的清除画布
+        if (pendingClearCanvas) {
+            pendingClearCanvas = false;
+            frame.getWhiteboardPanel().clearCanvas();
+        }
+    }
+
+    // IWhiteboardClient 接口实现
+    @Override
+    public void updateShape(Shape shape) throws RemoteException {
+        if (uiInitialized && frame != null) {
+            SwingUtilities.invokeLater(() -> {
+                frame.getWhiteboardPanel().addShape(shape);
+            });
+        } else {
+            // 缓存更新
+            synchronized (pendingShapes) {
+                pendingShapes.add(shape);
+            }
+            logger.info("Cached shape update: " + shape.getId());
+        }
+    }
+
+    @Override
+    public void removeShape(String shapeId) throws RemoteException {
+        if (uiInitialized && frame != null) {
+            SwingUtilities.invokeLater(() -> {
+                frame.getWhiteboardPanel().removeShape(shapeId);
+            });
+        } else {
+            // 缓存更新
+            synchronized (pendingShapeRemovals) {
+                pendingShapeRemovals.add(shapeId);
+            }
+            logger.info("Cached shape removal: " + shapeId);
+        }
+    }
+
+    @Override
+    public void updateUserList(List<String> users) throws RemoteException {
+        if (uiInitialized && frame != null) {
+            SwingUtilities.invokeLater(() -> {
+                frame.updateUserList(users);
+            });
+        } else {
+            // 缓存更新
+            pendingUserList = new ArrayList<>(users);
+            logger.info("Cached user list update");
+        }
+    }
+
+    @Override
+    public void receiveMessage(String senderName, String message) throws RemoteException {
+        if (uiInitialized && frame != null) {
+            SwingUtilities.invokeLater(() -> {
+                frame.addChatMessage(senderName, message);
+            });
+        } else {
+            // 缓存更新
+            synchronized (pendingMessages) {
+                pendingMessages.add(new ChatMessage(senderName, message));
+            }
+            logger.info("Cached chat message from " + senderName);
+        }
+    }
+
+    @Override
+    public void notifyManagerDecision(boolean approved) throws RemoteException {
+        if (uiInitialized && frame != null) {
+            SwingUtilities.invokeLater(() -> {
+                if (approved) {
+                    JOptionPane.showMessageDialog(frame,
+                            "Your request to join has been approved",
+                            "Request Approved",
+                            JOptionPane.INFORMATION_MESSAGE);
+                } else {
+                    JOptionPane.showMessageDialog(frame,
+                            "Your request to join has been rejected",
+                            "Request Rejected",
+                            JOptionPane.WARNING_MESSAGE);
+                    System.exit(0);
+                }
+            });
+        } else {
+            // 缓存更新
+            pendingManagerDecision = approved;
+            logger.info("Cached manager decision: " + (approved ? "approved" : "rejected"));
+
+            // 如果被拒绝，立即退出
+            if (!approved) {
+                System.exit(0);
+            }
+        }
+    }
+
+    @Override
+    public void notifyManagerLeft() throws RemoteException {
+        if (uiInitialized && frame != null) {
+            SwingUtilities.invokeLater(() -> {
+                JOptionPane.showMessageDialog(frame,
+                        "The manager has left the session. The application will now close.",
+                        "Session Ended",
+                        JOptionPane.WARNING_MESSAGE);
+                System.exit(0);
+            });
+        } else {
+            // 缓存更新
+            pendingManagerLeft = true;
+            logger.info("Cached manager left notification");
+        }
+    }
+
+    @Override
+    public void notifyKicked() throws RemoteException {
+        if (uiInitialized && frame != null) {
+            SwingUtilities.invokeLater(() -> {
+                JOptionPane.showMessageDialog(frame,
+                        "You have been kicked out by the manager.",
+                        "Kicked Out",
+                        JOptionPane.WARNING_MESSAGE);
+                System.exit(0);
+            });
+        } else {
+            // 缓存更新
+            pendingKicked = true;
+            logger.info("Cached kick notification");
+        }
+    }
+
+    @Override
+    public void receiveClearCanvas() throws RemoteException {
+        if (uiInitialized && frame != null) {
+            SwingUtilities.invokeLater(() -> {
+                frame.getWhiteboardPanel().clearCanvas();
+            });
+        } else {
+            // 缓存更新
+            pendingClearCanvas = true;
+            logger.info("Cached clear canvas notification");
+        }
+    }
+
+    // 其他方法保持不变...
 
     /**
      * 发送形状到服务器
@@ -141,20 +391,6 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
     }
 
     /**
-     * 发送清除画布请求
-     */
-    public void clearCanvas() {
-        if (isConnected && isManager) {
-            try {
-                server.clearCanvas(sessionId);
-            } catch (RemoteException e) {
-                logger.warning("Error clearing canvas: " + e.getMessage());
-                handleConnectionError(e);
-            }
-        }
-    }
-
-    /**
      * 发送聊天消息
      */
     public void sendChatMessage(String message) {
@@ -163,11 +399,45 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
                 logger.info("Sending chat message: " + message);
                 server.sendChatMessage(message, sessionId);
                 // 在本地显示自己的消息
-                frame.addChatMessage("Me", message);
+                if (uiInitialized && frame != null) {
+                    frame.addChatMessage("Me", message);
+                }
             } catch (RemoteException e) {
                 logger.warning("Error sending chat message: " + e.getMessage());
                 handleConnectionError(e);
             }
+        }
+    }
+
+    /**
+     * 断开连接
+     */
+    public void disconnect() {
+        if (isConnected) {
+            try {
+                server.disconnectUser(sessionId);
+                isConnected = false;
+                logger.info("Disconnected from server");
+            } catch (RemoteException e) {
+                logger.warning("Error disconnecting from server: " + e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * 处理连接错误
+     */
+    private void handleConnectionError(Exception e) {
+        isConnected = false;
+        if (uiInitialized && frame != null) {
+            SwingUtilities.invokeLater(() -> {
+                JOptionPane.showMessageDialog(frame,
+                        "Lost connection to server: " + e.getMessage(),
+                        "Connection Error",
+                        JOptionPane.ERROR_MESSAGE);
+            });
+        } else {
+            logger.severe("Lost connection to server: " + e.getMessage());
         }
     }
 
@@ -262,109 +532,5 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
      */
     public boolean hasFilename() {
         return currentFilename != null;
-    }
-
-    /**
-     * 断开连接
-     */
-    public void disconnect() {
-        if (isConnected) {
-            try {
-                server.disconnectUser(sessionId);
-                isConnected = false;
-                logger.info("Disconnected from server");
-            } catch (RemoteException e) {
-                logger.warning("Error disconnecting from server: " + e.getMessage());
-            }
-        }
-    }
-
-    /**
-     * 处理连接错误
-     */
-    private void handleConnectionError(Exception e) {
-        isConnected = false;
-        JOptionPane.showMessageDialog(frame,
-                "Lost connection to server: " + e.getMessage(),
-                "Connection Error",
-                JOptionPane.ERROR_MESSAGE);
-    }
-
-    // IWhiteboardClient 接口实现
-    @Override
-    public void updateShape(Shape shape) throws RemoteException {
-        logger.info("Received shape update: " + shape.getId());
-        SwingUtilities.invokeLater(() -> {
-            frame.getWhiteboardPanel().addShape(shape);
-        });
-    }
-
-    @Override
-    public void removeShape(String shapeId) throws RemoteException {
-        SwingUtilities.invokeLater(() -> {
-            frame.getWhiteboardPanel().removeShape(shapeId);
-        });
-    }
-
-    @Override
-    public void updateUserList(List<String> users) throws RemoteException {
-        SwingUtilities.invokeLater(() -> {
-            frame.updateUserList(users);
-        });
-    }
-
-    @Override
-    public void receiveMessage(String senderName, String message) throws RemoteException {
-        logger.info("Received message from " + senderName + ": " + message);
-        SwingUtilities.invokeLater(() -> {
-            frame.addChatMessage(senderName, message);
-        });
-    }
-
-    @Override
-    public void notifyManagerDecision(boolean approved) throws RemoteException {
-        SwingUtilities.invokeLater(() -> {
-            if (approved) {
-                JOptionPane.showMessageDialog(frame,
-                        "Your request to join has been approved",
-                        "Request Approved",
-                        JOptionPane.INFORMATION_MESSAGE);
-            } else {
-                JOptionPane.showMessageDialog(frame,
-                        "Your request to join has been rejected",
-                        "Request Rejected",
-                        JOptionPane.WARNING_MESSAGE);
-                System.exit(0);
-            }
-        });
-    }
-
-    @Override
-    public void notifyManagerLeft() throws RemoteException {
-        SwingUtilities.invokeLater(() -> {
-            JOptionPane.showMessageDialog(frame,
-                    "The manager has left the session. The application will now close.",
-                    "Session Ended",
-                    JOptionPane.WARNING_MESSAGE);
-            System.exit(0);
-        });
-    }
-
-    @Override
-    public void notifyKicked() throws RemoteException {
-        SwingUtilities.invokeLater(() -> {
-            JOptionPane.showMessageDialog(frame,
-                    "You have been kicked out by the manager.",
-                    "Kicked Out",
-                    JOptionPane.WARNING_MESSAGE);
-            System.exit(0);
-        });
-    }
-
-    @Override
-    public void receiveClearCanvas() throws RemoteException {
-        SwingUtilities.invokeLater(() -> {
-            frame.getWhiteboardPanel().clearCanvas();
-        });
     }
 }
