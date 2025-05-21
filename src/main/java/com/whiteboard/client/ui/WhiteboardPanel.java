@@ -13,6 +13,7 @@ import java.awt.*;
 import java.awt.event.*;
 import java.util.List;
 import java.util.function.Consumer;
+import java.util.logging.Logger;
 
 
 import com.whiteboard.client.tools.*;
@@ -27,6 +28,8 @@ public class WhiteboardPanel extends JPanel {
     private ToolPanel toolPanel;
     private Point currentPoint;
     private Consumer<Shape> drawingListener;
+
+    private static final Logger logger = Logger.getLogger(WhiteboardPanel.class.getName());
 
 
 
@@ -656,6 +659,7 @@ public class WhiteboardPanel extends JPanel {
 
     // 清除画布
     public void clearCanvas() {
+        logger.info("Clearing canvas in WhiteboardPanel");
         shapes.clear();
 
         // 重置当前工具状态，取消任何正在进行的绘制操作
@@ -684,6 +688,8 @@ public class WhiteboardPanel extends JPanel {
         }
 
         repaint();
+        // Log the action
+        logger.info("Canvas cleared successfully, shapes count: " + shapes.size());
     }
 
     // 获取所有形状
@@ -756,5 +762,9 @@ public class WhiteboardPanel extends JPanel {
         repaint();
     }
 
+    // 在 WhiteboardPanel.java 中添加这个方法
+    public Consumer<Shape> getDrawingListener() {
+        return drawingListener;
+    }
 
 }

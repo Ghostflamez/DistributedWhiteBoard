@@ -80,37 +80,37 @@ public class EraserTool implements DrawingTool {
 
     // 添加带插值的点，解决快速移动时的路径不连续问题
     private void addPointWithInterpolation(Point newPoint) {
-        if (erasePath.isEmpty()) {
-            erasePath.add(newPoint);
-            currentErasure.addPoint(newPoint);
-            return;
-        }
-
-        // 获取最后一个点
-        Point lastPoint = erasePath.get(erasePath.size() - 1);
-
-        // 计算距离
-        double distance = lastPoint.distance(newPoint);
-
-        // 如果距离太大，插入中间点
-        if (distance > 10) { // 10像素作为阈值
-            int steps = (int)(distance / 5) + 1; // 每5像素一个点
-
-            for (int i = 1; i < steps; i++) {
-                double ratio = (double)i / steps;
-                int x = (int)(lastPoint.x + (newPoint.x - lastPoint.x) * ratio);
-                int y = (int)(lastPoint.y + (newPoint.y - lastPoint.y) * ratio);
-
-                Point interpolatedPoint = new Point(x, y);
-                erasePath.add(interpolatedPoint);
-                currentErasure.addPoint(interpolatedPoint);
-            }
-        }
-
-        // 添加新点
+    if (erasePath.isEmpty()) {
         erasePath.add(newPoint);
         currentErasure.addPoint(newPoint);
+        return;
     }
+
+    // Get the last point
+    Point lastPoint = erasePath.get(erasePath.size() - 1);
+
+    // Calculate distance
+    double distance = lastPoint.distance(newPoint);
+
+    // If distance is too large, interpolate points between
+    if (distance > 8) { // Lower threshold to 8 pixels for smoother curves
+        int steps = (int)(distance / 4) + 1; // More points (every 4 pixels)
+
+        for (int i = 1; i < steps; i++) {
+            double ratio = (double)i / steps;
+            int x = (int)(lastPoint.x + (newPoint.x - lastPoint.x) * ratio);
+            int y = (int)(lastPoint.y + (newPoint.y - lastPoint.y) * ratio);
+
+            Point interpolatedPoint = new Point(x, y);
+            erasePath.add(interpolatedPoint);
+            currentErasure.addPoint(interpolatedPoint);
+        }
+    }
+
+    // Add the new point
+    erasePath.add(newPoint);
+    currentErasure.addPoint(newPoint);
+}
 
 
 

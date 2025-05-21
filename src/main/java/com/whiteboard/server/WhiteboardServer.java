@@ -210,24 +210,38 @@ public class WhiteboardServer implements IWhiteboardServer {
     public void clearCanvas(String sessionId) throws RemoteException {
         logger.info("Clearing canvas, requested by session: " + sessionId);
 
-        // 检查用户权限（只有管理员可以清除画布）
-        if (userManager.isManager(sessionId)) {
-            // 清除白板状态
-            whiteboardState.clear();
-
-        // 广播清除操作给所有客户端 - 删除条件检查，向所有人广播
-        for (Map.Entry<String, IWhiteboardClient> entry : clientCallbacks.entrySet()) {
-            try {
-                entry.getValue().receiveClearCanvas();
-                logger.info("Sent clear canvas notification to: " + entry.getKey());
-            } catch (RemoteException e) {
-                logger.warning("Error sending canvas clear to client: " + e.getMessage());
-            }
-        }
-    } else {
+    // Check if user is manager
+    if (!userManager.isManager(sessionId)) {
         logger.warning("Non-manager attempted to clear canvas: " + sessionId);
         throw new RemoteException("Only manager can clear canvas");
+        // Return early - important!
     }
+
+    // User is manager, proceed with clear operation
+    logger.info("Manager authorized to clear canvas, proceeding...");
+
+    // Clear whiteboard state
+    whiteboardState.clear();
+
+    // Create a local copy of clients to avoid concurrent modification
+    Map<String, IWhiteboardClient> clients = new HashMap<>(clientCallbacks);
+
+    // Broadcast clear operation to ALL clients
+    for (Map.Entry<String, IWhiteboardClient> entry : clients.entrySet()) {
+        String clientId = entry.getKey();
+        IWhiteboardClient client = entry.getValue();
+
+        try {
+            logger.info("Sending clear canvas to client: " + clientId);
+            client.receiveClearCanvas();
+            logger.info("Successfully sent clear canvas to: " + clientId);
+        } catch (RemoteException e) {
+            logger.warning("Error sending canvas clear to client " + clientId + ": " + e.getMessage());
+            // Don't remove clients here - do it in a separate cleanup method
+        }
+    }
+
+    logger.info("Canvas cleared and broadcasted to all clients");
 }
 
     @Override

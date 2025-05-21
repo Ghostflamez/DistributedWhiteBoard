@@ -455,17 +455,25 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
     @Override
     public void receiveClearCanvas() throws RemoteException {
     logger.info("Received clear canvas command from server");
-    if (uiInitialized && frame != null) {
-        SwingUtilities.invokeLater(() -> {
-            frame.getWhiteboardPanel().clearCanvas();
-            logger.info("Canvas cleared successfully");
-        });
-    } else {
-        // 缓存更新
-        pendingClearCanvas = true;
-        logger.info("Cached clear canvas notification");
+
+        // Process immediately if UI is ready
+        if (uiInitialized && frame != null) {
+            SwingUtilities.invokeLater(() -> {
+                try {
+                    logger.info("Clearing canvas on UI thread");
+                    frame.getWhiteboardPanel().clearCanvas();
+                    logger.info("Canvas cleared successfully");
+                } catch (Exception e) {
+                    logger.severe("Error clearing canvas: " + e.getMessage());
+                    e.printStackTrace();
+                }
+            });
+        } else {
+            // 缓存更新
+            pendingClearCanvas = true;
+            logger.info("Cached clear canvas notification (UI not ready)");
+        }
     }
-}
 
     // 其他方法保持不变...
 
@@ -886,4 +894,26 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
         });
     }
 
+    /**
+     * Send clear canvas command to server
+     */
+    public void clearCanvas() {
+        if (isConnected && isManager) {
+            try {
+                System.out.println("Sending clear canvas command to server...");
+                server.clearCanvas(sessionId);
+                System.out.println("Clear canvas command sent successfully");
+            } catch (RemoteException e) {
+                logger.warning("Error sending clear canvas command: " + e.getMessage());
+                handleConnectionError(e);
+            }
+        } else {
+            logger.warning("Only managers can clear the canvas");
+            throw new RuntimeException("Only managers can clear the canvas");
+        }
+    }
+
+    public boolean isManager() {
+        return isManager;
+    }
 }

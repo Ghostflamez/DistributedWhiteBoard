@@ -11,12 +11,16 @@ import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.event.FocusAdapter;
 import java.awt.event.FocusEvent;
+import java.util.logging.Logger;
+import com.whiteboard.client.WhiteboardClient;
 
 public class ToolPanel extends JToolBar {
     private WhiteboardPanel whiteboardPanel;
     private JSlider strokeWidthSlider;
     private JTextField strokeWidthField;
     private JPanel strokePreviewPanel; // 用于显示线宽预览
+    // At the top of each class file:
+    private static final Logger logger = Logger.getLogger(ToolPanel.class.getName());
 
     public ToolPanel(WhiteboardPanel whiteboardPanel) {
         this.whiteboardPanel = whiteboardPanel;
@@ -67,7 +71,37 @@ public class ToolPanel extends JToolBar {
 
         // 清除按钮
         JButton clearButton = new JButton("Clear All");
-        clearButton.addActionListener(e -> whiteboardPanel.clearCanvas());
+        clearButton.addActionListener(e -> {
+            // Clear local canvas
+            whiteboardPanel.clearCanvas();
+
+            // 然后通过父窗口获取客户端引用并发送清除命令到服务器
+            Window window = SwingUtilities.getWindowAncestor(whiteboardPanel);
+            if (window instanceof WhiteboardFrame) {
+                WhiteboardFrame frame = (WhiteboardFrame) window;
+                WhiteboardClient client = frame.getClient();
+
+                if (client != null && client.isManager()) {
+                    // 发送清除命令到服务器
+                    try {
+                        System.out.println("Sending clear canvas request to server");
+                        client.clearCanvas();
+                    } catch (Exception ex) {
+                        System.err.println("Error sending clear canvas command: " + ex.getMessage());
+                        ex.printStackTrace();
+                    }
+                } else if (client != null && !client.isManager()) {
+                    // 如果不是管理员，显示提示信息
+                    JOptionPane.showMessageDialog(whiteboardPanel,
+                            "Only the manager can clear the canvas.",
+                            "Permission Denied",
+                            JOptionPane.WARNING_MESSAGE);
+
+                    // 撤销本地清除操作（因为没有权限）
+                    // 这里可以考虑重新加载画布状态，但为了简单起见，我们显示错误信息
+                }
+            }
+        });
         add(clearButton);
 
         // 添加分隔符

@@ -328,8 +328,24 @@ public class WhiteboardFrame extends JFrame {
 
     // 文件菜单功能（暂时只是占位方法）
     private void newWhiteboard() {
-        // TODO: 实现新建白板功能
-        JOptionPane.showMessageDialog(this, "New whiteboard functionality not implemented yet.");
+        if (client != null && client.isManager()) {
+            try {
+                logger.info("Initiating new whiteboard from menu");
+                client.clearCanvas(); // This will clear locally and send to server
+                logger.info("New whiteboard command sent to server");
+            } catch (Exception e) {
+                logger.severe("Error creating new whiteboard: " + e.getMessage());
+                JOptionPane.showMessageDialog(this,
+                        "Error creating new whiteboard: " + e.getMessage(),
+                        "Error",
+                        JOptionPane.ERROR_MESSAGE);
+            }
+        } else {
+            JOptionPane.showMessageDialog(this,
+                    "Only the manager can create a new whiteboard.",
+                    "Permission Denied",
+                    JOptionPane.WARNING_MESSAGE);
+        }
     }
 
     private void openWhiteboard() {
@@ -361,6 +377,10 @@ public class WhiteboardFrame extends JFrame {
 
     public WhiteboardPanel getWhiteboardPanel() {
         return whiteboardPanel;
+    }
+
+    public WhiteboardClient getClient() {
+        return this.client;
     }
 
     /**
