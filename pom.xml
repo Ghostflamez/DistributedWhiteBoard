@@ -49,12 +49,32 @@
                 </configuration>
             </plugin>
 
-            <!-- 创建客户端可执行JAR -->
+            <!-- 创建客户端和服务器可执行JAR -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-assembly-plugin</artifactId>
                 <version>3.4.0</version>
                 <executions>
+                    <!-- 创建ServerStarter可执行JAR -->
+                    <execution>
+                        <id>server-starter</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>single</goal>
+                        </goals>
+                        <configuration>
+                            <archive>
+                                <manifest>
+                                    <mainClass>com.whiteboard.server.ServerStarter</mainClass>
+                                </manifest>
+                            </archive>
+                            <descriptorRefs>
+                                <descriptorRef>jar-with-dependencies</descriptorRef>
+                            </descriptorRefs>
+                            <finalName>WhiteboardServer</finalName>
+                        </configuration>
+                    </execution>
+
                     <!-- 创建CreateWhiteBoard可执行JAR -->
                     <execution>
                         <id>create-whiteboard</id>

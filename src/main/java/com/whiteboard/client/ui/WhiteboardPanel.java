@@ -11,15 +11,12 @@ import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import java.awt.*;
 import java.awt.event.*;
+import java.util.List;
+import java.util.function.Consumer;
 
 
 import com.whiteboard.client.tools.*;
-
-import javax.swing.*;
-import java.awt.*;
-import java.awt.event.*;
 import java.util.ArrayList;
-import java.util.List;
 
 public class WhiteboardPanel extends JPanel {
     private List<Shape> shapes;
@@ -29,6 +26,10 @@ public class WhiteboardPanel extends JPanel {
     private Font currentFont;
     private ToolPanel toolPanel;
     private Point currentPoint;
+    private Consumer<Shape> drawingListener;
+
+
+
 
     public WhiteboardPanel() {
         shapes = new ArrayList<>();
@@ -105,6 +106,11 @@ public class WhiteboardPanel extends JPanel {
                     Shape shape = currentTool.getCreatedShape();
                     if (shape != null) {
                         shapes.add(shape);
+
+                        // 如果有绘图监听器，通知形状变化
+                        if (drawingListener != null) {
+                            drawingListener.accept(shape);
+                        }
                     }
                     repaint();
                 }
@@ -703,6 +709,24 @@ public class WhiteboardPanel extends JPanel {
 
     public Font getCurrentFont() {
         return currentFont;
+    }
+
+    // Connection related methods
+    // 设置绘制监听器
+    public void setDrawingListener(Consumer<Shape> listener) {
+        this.drawingListener = listener;
+    }
+
+    public void addShape(Shape shape) {
+        if (shape != null) {
+            shapes.add(shape);
+            repaint();
+        }
+    }
+
+    public void removeShape(String shapeId) {
+        shapes.removeIf(shape -> shape.getId().equals(shapeId));
+        repaint();
     }
 
 
