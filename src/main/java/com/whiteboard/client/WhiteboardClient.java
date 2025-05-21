@@ -89,11 +89,15 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
             // 初始化UI
             initializeUI();
 
-        } catch (Exception e) {
-            logger.severe("Error initializing client: " + e.getMessage());
-            throw new RemoteException("Failed to initialize client", e);
-        }
+    } catch (RuntimeException e) {
+        // 将 RuntimeException 转换为 RemoteException 向上抛出
+        logger.severe("Error initializing client: " + e.getMessage());
+        throw new RemoteException("Failed to initialize client", e);
+    } catch (Exception e) {
+        logger.severe("Error initializing client: " + e.getMessage());
+        throw new RemoteException("Failed to initialize client", e);
     }
+}
 
     /**
      * 连接到服务器
@@ -110,15 +114,15 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
             // 连接用户
             sessionId = server.connectUser(username, requestAsManager);
 
-            // 如果返回null，表示连接被拒绝
-            if (sessionId == null) {
-                JOptionPane.showMessageDialog(null,
-                        "Connection rejected: Another manager is already connected.",
-                        "Connection Error",
-                        JOptionPane.ERROR_MESSAGE);
-                isConnected = false;
-                return;
-            }
+        // 如果返回null，表示连接被拒绝
+        if (sessionId == null) {
+            String errorMsg = requestAsManager ?
+                "Connection rejected: Another manager is already connected." :
+                "Connection rejected by server.";
+
+            // 抛出 RuntimeException 而不是 RemoteException，让调用者处理
+            throw new RuntimeException(errorMsg);
+        }
 
             // 确定管理员状态
             isManager = server.isManager(sessionId);
@@ -127,28 +131,23 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
             // 启动心跳
             startHeartbeat();
 
-            // 如果不是管理员，显示等待对话框并启动加入请求
-            if (!isManager) {
-                // 创建非模态等待对话框
-                createWaitingDialog();
-
-                // 启动加入请求
-                startJoinRequestTimer();
-            } else {
-                isApproved = true; // 管理员自动批准
-            }
-
-            logger.info("Connected to server as " + (isManager ? "manager" : "regular user") +
-                    ", isApproved=" + isApproved);
-        } catch (RemoteException | NotBoundException e) {
-            logger.severe("Could not connect to server: " + e.getMessage());
-            JOptionPane.showMessageDialog(null,
-                    "Error connecting to server: " + e.getMessage(),
-                    "Connection Error",
-                    JOptionPane.ERROR_MESSAGE);
-            isConnected = false;
+        // 如果不是管理员，显示等待对话框并启动加入请求
+        if (!isManager) {
+            createWaitingDialog();
+            startJoinRequestTimer();
+        } else {
+            isApproved = true; // 管理员自动批准
         }
+
+        logger.info("Connected to server as " + (isManager ? "manager" : "regular user") +
+                ", isApproved=" + isApproved);
+    } catch (RemoteException | NotBoundException e) {
+        logger.severe("Could not connect to server: " + e.getMessage());
+        isConnected = false;
+        // 抛出 RuntimeException，让调用者处理UI显示和程序退出
+        throw new RuntimeException("Failed to connect to server: " + e.getMessage(), e);
     }
+}
 
 
     /**
@@ -646,19 +645,30 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
 
         heartbeatTimer = new Timer(true);
         heartbeatTimer.scheduleAtFixedRate(new TimerTask() {
+            private int failureCount = 0;
+            private final int MAX_FAILURES = 3;
+
             @Override
             public void run() {
                 if (isConnected) {
                     try {
                         // 发送心跳
                         server.updateUserActivity(sessionId);
+                        failureCount = 0; // 重置失败计数
+                        logger.fine("Heartbeat sent successfully");
                     } catch (RemoteException e) {
-                        logger.warning("Heartbeat failed: " + e.getMessage());
-                        handleConnectionError(e);
+                        failureCount++;
+                        logger.warning("Heartbeat failed (" + failureCount + "/" + MAX_FAILURES + "): " + e.getMessage());
+
+                        if (failureCount >= MAX_FAILURES) {
+                            logger.severe("Multiple heartbeat failures, treating as disconnected");
+                            handleConnectionError(e);
+                            heartbeatTimer.cancel();
+                        }
                     }
                 }
             }
-        }, 5000, 5000); // 每5秒发送一次心跳
+        }, 3000, 3000); // 每3秒发送一次心跳，更频繁的检测
     }
 
     /**

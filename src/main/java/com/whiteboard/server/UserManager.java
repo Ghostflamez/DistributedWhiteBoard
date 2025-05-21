@@ -219,36 +219,36 @@ public class UserManager {
         long currentTime = System.currentTimeMillis();
         List<String> sessionsToRemove = new ArrayList<>();
 
-        // 检查管理员状态
-        if (managerId != null) {
-            User manager = connectedUsers.get(managerId);
-            if (manager != null && (currentTime - manager.getLastActivity()) > MANAGER_TIMEOUT_MS) {
-                logger.warning("Manager timeout detected");
-                sessionsToRemove.add(managerId);
-            }
+    // 检查管理员状态 - 缩短超时时间
+    if (managerId != null) {
+        User manager = connectedUsers.get(managerId);
+        if (manager != null && (currentTime - manager.getLastActivity()) > 8000) { // 8秒超时
+            logger.warning("Manager timeout detected");
+            sessionsToRemove.add(managerId);
         }
+    }
 
         // 检查已连接用户
         for (Map.Entry<String, User> entry : connectedUsers.entrySet()) {
             String sessionId = entry.getKey();
             if (sessionId.equals(managerId)) continue; // 跳过管理员
 
-            User user = entry.getValue();
-            if ((currentTime - user.getLastActivity()) > USER_TIMEOUT_MS) {
-                logger.info("User timeout detected: " + user.getUsername());
-                sessionsToRemove.add(sessionId);
-            }
+        User user = entry.getValue();
+        if ((currentTime - user.getLastActivity()) > 8000) { // 8秒超时
+            logger.info("User timeout detected: " + user.getUsername());
+            sessionsToRemove.add(sessionId);
         }
+    }
 
-        // 检查等待批准的用户
-        for (Map.Entry<String, User> entry : pendingUsers.entrySet()) {
-            String sessionId = entry.getKey();
-            User user = entry.getValue();
-            if ((currentTime - user.getLastActivity()) > USER_TIMEOUT_MS) {
-                logger.info("Pending user timeout detected: " + user.getUsername());
-                sessionsToRemove.add(sessionId);
-            }
+    // 检查等待批准的用户
+    for (Map.Entry<String, User> entry : pendingUsers.entrySet()) {
+        String sessionId = entry.getKey();
+        User user = entry.getValue();
+        if ((currentTime - user.getLastActivity()) > 8000) { // 8秒超时
+            logger.info("Pending user timeout detected: " + user.getUsername());
+            sessionsToRemove.add(sessionId);
         }
+    }
 
         // 移除超时用户
         for (String sessionId : sessionsToRemove) {

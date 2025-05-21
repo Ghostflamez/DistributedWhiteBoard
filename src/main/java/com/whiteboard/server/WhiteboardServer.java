@@ -17,6 +17,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Logger;
+import java.util.Timer;
+import java.util.TimerTask;
 
 /**
  * WhiteboardServer类实现了IWhiteboardServer接口，提供了白板的远程服务。
@@ -41,6 +43,9 @@ public class WhiteboardServer implements IWhiteboardServer {
         userManager = new UserManager();
         clientCallbacks = new ConcurrentHashMap<>();
         regionLocks = new ConcurrentHashMap<>();
+
+        // 启动主动心跳检测
+        startActiveHeartbeatCheck();
 
         // 添加关闭钩子
         addShutdownHook();
@@ -171,16 +176,8 @@ public class WhiteboardServer implements IWhiteboardServer {
             // 添加形状到白板状态
             whiteboardState.addShape(shape);
 
-            // 广播形状给所有客户端
-            for (Map.Entry<String, IWhiteboardClient> entry : clientCallbacks.entrySet()) {
-                try {
-                    // 这里打印日志以确认广播确实在发生
-                    logger.info("Broadcasting shape to client: " + entry.getKey());
-                    entry.getValue().updateShape(shape);
-                } catch (RemoteException e) {
-                    logger.warning("Error sending shape update to client: " + e.getMessage());
-                }
-            }
+            // 广播形状给所有客户端，带断连检测
+            broadcastShapeUpdate(shape);
         }
     }
 
@@ -223,25 +220,8 @@ public class WhiteboardServer implements IWhiteboardServer {
     // Clear whiteboard state
     whiteboardState.clear();
 
-    // Create a local copy of clients to avoid concurrent modification
-    Map<String, IWhiteboardClient> clients = new HashMap<>(clientCallbacks);
-
-    // Broadcast clear operation to ALL clients
-    for (Map.Entry<String, IWhiteboardClient> entry : clients.entrySet()) {
-        String clientId = entry.getKey();
-        IWhiteboardClient client = entry.getValue();
-
-        try {
-            logger.info("Sending clear canvas to client: " + clientId);
-            client.receiveClearCanvas();
-            logger.info("Successfully sent clear canvas to: " + clientId);
-        } catch (RemoteException e) {
-            logger.warning("Error sending canvas clear to client " + clientId + ": " + e.getMessage());
-            // Don't remove clients here - do it in a separate cleanup method
-        }
-    }
-
-    logger.info("Canvas cleared and broadcasted to all clients");
+    // 广播清除命令，带断连检测
+    broadcastClearCanvas();
 }
 
     @Override
@@ -381,20 +361,28 @@ public class WhiteboardServer implements IWhiteboardServer {
         List<String> usernames = userManager.getConnectedUsernames();
         logger.info("Broadcasting user list: " + usernames);
 
-        for (Map.Entry<String, IWhiteboardClient> entry : clientCallbacks.entrySet()) {
-            try {
-                entry.getValue().updateUserList(usernames);
-            } catch (RemoteException e) {
-                logger.warning("Error broadcasting user list to " + entry.getKey() + ": " + e.getMessage());
-                // 考虑移除断开的客户端
-                if (e.getCause() instanceof java.net.ConnectException) {
-                    String sessionToRemove = entry.getKey();
-                    clientCallbacks.remove(sessionToRemove);
-                    logger.warning("Removed disconnected client from callbacks: " + sessionToRemove);
-                }
-            }
+    // 创建副本避免并发修改异常
+    Map<String, IWhiteboardClient> clients = new HashMap<>(clientCallbacks);
+    List<String> disconnectedClients = new ArrayList<>();
+
+    for (Map.Entry<String, IWhiteboardClient> entry : clients.entrySet()) {
+        String sessionId = entry.getKey();
+        IWhiteboardClient client = entry.getValue();
+
+        try {
+            // 设置较短的超时时间来快速检测断连
+            client.updateUserList(usernames);
+        } catch (RemoteException e) {
+            logger.warning("Client disconnected during broadcast: " + sessionId + ", error: " + e.getMessage());
+            disconnectedClients.add(sessionId);
         }
     }
+
+    // 清理断开连接的客户端
+    for (String sessionId : disconnectedClients) {
+        handleClientDisconnection(sessionId);
+    }
+}
 
     private void notifyManagerLeft() {
         for (IWhiteboardClient client : clientCallbacks.values()) {
@@ -643,5 +631,110 @@ public class WhiteboardServer implements IWhiteboardServer {
                 // 忽略关闭时的异常
             }
         }
+    }
+
+    // 客户端断连处理方法
+    private void handleClientDisconnection(String sessionId) {
+        logger.info("Handling client disconnection: " + sessionId);
+
+        // 从回调列表移除
+        clientCallbacks.remove(sessionId);
+
+        // 从用户管理器移除
+        User disconnectedUser = userManager.getUserBySessionId(sessionId);
+        if (disconnectedUser != null) {
+            logger.info("Removing disconnected user: " + disconnectedUser.getUsername());
+            userManager.removeUser(sessionId);
+
+            // 如果是管理员断开，通知所有客户端
+            if (disconnectedUser.isManager()) {
+                notifyManagerLeft();
+            } else {
+                // 重新广播用户列表（不包含断开的用户）
+                broadcastUserList();
+            }
+        }
+    }
+
+    private void broadcastShapeUpdate(Shape shape) {
+        Map<String, IWhiteboardClient> clients = new HashMap<>(clientCallbacks);
+        List<String> disconnectedClients = new ArrayList<>();
+
+        for (Map.Entry<String, IWhiteboardClient> entry : clients.entrySet()) {
+            String sessionId = entry.getKey();
+            IWhiteboardClient client = entry.getValue();
+
+            try {
+                client.updateShape(shape);
+                logger.fine("Successfully broadcasted shape to client: " + sessionId);
+            } catch (RemoteException e) {
+                logger.warning("Client disconnected during shape broadcast: " + sessionId);
+                disconnectedClients.add(sessionId);
+            }
+        }
+
+        // 清理断开连接的客户端
+        for (String sessionId : disconnectedClients) {
+            handleClientDisconnection(sessionId);
+        }
+    }
+
+    // 带断连检测的清除广播方法
+    private void broadcastClearCanvas() {
+        Map<String, IWhiteboardClient> clients = new HashMap<>(clientCallbacks);
+        List<String> disconnectedClients = new ArrayList<>();
+
+        for (Map.Entry<String, IWhiteboardClient> entry : clients.entrySet()) {
+            String sessionId = entry.getKey();
+            IWhiteboardClient client = entry.getValue();
+
+            try {
+                logger.info("Sending clear canvas to client: " + sessionId);
+                client.receiveClearCanvas();
+                logger.info("Successfully sent clear canvas to: " + sessionId);
+            } catch (RemoteException e) {
+                logger.warning("Client disconnected during clear broadcast: " + sessionId);
+                disconnectedClients.add(sessionId);
+            }
+        }
+
+        // 清理断开连接的客户端
+        for (String sessionId : disconnectedClients) {
+            handleClientDisconnection(sessionId);
+        }
+    }
+
+    private void performActiveHeartbeatCheck() {
+        Map<String, IWhiteboardClient> clients = new HashMap<>(clientCallbacks);
+        List<String> disconnectedClients = new ArrayList<>();
+
+        for (Map.Entry<String, IWhiteboardClient> entry : clients.entrySet()) {
+            String sessionId = entry.getKey();
+            IWhiteboardClient client = entry.getValue();
+
+            try {
+                // 主动发送心跳检测
+                client.heartbeat();
+                logger.fine("Heartbeat response received from: " + sessionId);
+            } catch (RemoteException e) {
+                logger.warning("Client failed heartbeat check: " + sessionId);
+                disconnectedClients.add(sessionId);
+            }
+        }
+
+        // 处理断开连接的客户端
+        for (String sessionId : disconnectedClients) {
+            handleClientDisconnection(sessionId);
+        }
+    }
+
+    private void startActiveHeartbeatCheck() {
+        Timer activeHeartbeatTimer = new Timer(true);
+        activeHeartbeatTimer.scheduleAtFixedRate(new TimerTask() {
+            @Override
+            public void run() {
+                performActiveHeartbeatCheck();
+            }
+        }, 10000, 10000); // 每10秒进行一次主动检测
     }
 }
