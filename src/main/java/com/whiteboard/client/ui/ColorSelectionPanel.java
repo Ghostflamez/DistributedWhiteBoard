@@ -19,8 +19,8 @@ public class ColorSelectionPanel extends JPanel {
     private AdvancedColorPanel advancedColorPanel;
 
     public ColorSelectionPanel(Color initialColor, Consumer<Color> colorChangeListener) {
-        this.currentColor = initialColor;
-        this.currentAlpha = initialColor.getAlpha();
+        this.currentColor = initialColor != null ? initialColor : Color.BLACK;
+        this.currentAlpha = this.currentColor.getAlpha();
         this.colorChangeListener = colorChangeListener;
 
         setLayout(new BorderLayout(5, 0));
@@ -134,27 +134,61 @@ public class ColorSelectionPanel extends JPanel {
     }
 
     private void showAdvancedColorDialog() {
-        if (advancedDialog == null) {
+        try {
             Window parent = SwingUtilities.getWindowAncestor(this);
-            advancedDialog = new JDialog(parent, "Advanced Color Selector", Dialog.ModalityType.APPLICATION_MODAL);
-            advancedColorPanel = new AdvancedColorPanel(currentColor, color -> {
-                setBaseColor(new Color(color.getRed(), color.getGreen(), color.getBlue(), currentAlpha));
-            });
-            advancedDialog.add(advancedColorPanel);
-            advancedDialog.pack();
-            advancedDialog.setLocationRelativeTo(parent);
-            advancedDialog.setResizable(false);
-        } else {
-            advancedColorPanel.setColor(new Color(
-                    currentColor.getRed(),
-                    currentColor.getGreen(),
-                    currentColor.getBlue(),
-                    255)); // 使用完全不透明来编辑基础颜色
-        }
 
-        advancedDialog.setVisible(true);
+            if (advancedDialog == null) {
+                // 创建对话框
+                advancedDialog = new JDialog(
+                        (parent instanceof Frame) ? (Frame) parent : null,
+                        "Advanced Color Selector",
+                        Dialog.ModalityType.APPLICATION_MODAL);
+
+                // 创建高级颜色面板
+                advancedColorPanel = new AdvancedColorPanel(currentColor, color -> {
+                    // 这个回调会在用户点击"Apply"或"OK"按钮时被调用
+                    // 在此更新主面板的颜色
+                    setColor(color);
+
+                    // 通知监听器
+                    if (colorChangeListener != null) {
+                        colorChangeListener.accept(color);
+                    }
+                });
+
+                // 设置对话框引用
+                advancedColorPanel.setOwnerDialog(advancedDialog);
+
+                // 添加面板到对话框
+                advancedDialog.add(advancedColorPanel);
+                advancedDialog.pack();
+                advancedDialog.setLocationRelativeTo(parent);
+                advancedDialog.setResizable(false);
+            } else {
+                // 对话框已存在，更新高级面板的初始颜色
+                advancedColorPanel.setColor(currentColor);
+            }
+
+            // 显示对话框
+            advancedDialog.setVisible(true);
+
+            // 对话框关闭后
+            // 不需要在这里处理颜色更新，因为"Apply"和"OK"按钮会
+            // 通过回调函数处理颜色更新
+
+        } catch (Exception e) {
+            // 处理任何可能的异常
+            e.printStackTrace();
+            JOptionPane.showMessageDialog(this,
+                    "Error opening color selector: " + e.getMessage(),
+                    "Error",
+                    JOptionPane.ERROR_MESSAGE);
+        }
     }
 
+    /**
+     * 设置基础颜色（保持当前Alpha值）
+     */
     private void setBaseColor(Color color) {
         // 保持当前的透明度
         this.currentColor = new Color(
@@ -164,12 +198,18 @@ public class ColorSelectionPanel extends JPanel {
                 currentAlpha
         );
 
+        // 更新UI
         hexLabel.setText(String.format("#%02X%02X%02X",
                 currentColor.getRed(), currentColor.getGreen(), currentColor.getBlue()));
         colorPreviewCircle.repaint();
+
+        // 通知颜色变化
         notifyColorChange();
     }
 
+    /**
+     * 更新带Alpha值的颜色
+     */
     private void updateColorWithAlpha() {
         this.currentColor = new Color(
                 currentColor.getRed(),
@@ -181,14 +221,25 @@ public class ColorSelectionPanel extends JPanel {
         notifyColorChange();
     }
 
+    /**
+     * 设置颜色
+     * 此方法用于从外部设置颜色，如从高级面板
+     */
     public void setColor(Color color) {
-        this.currentColor = color;
-        this.currentAlpha = color.getAlpha();
-        hexLabel.setText(String.format("#%02X%02X%02X",
-                color.getRed(), color.getGreen(), color.getBlue()));
-        alphaSlider.setValue(currentAlpha * 100 / 255);
-        alphaField.setText(alphaSlider.getValue() + "%");
-        colorPreviewCircle.repaint();
+        if (color != null) {
+            this.currentColor = color;
+            this.currentAlpha = color.getAlpha();
+
+            // 更新UI组件
+            hexLabel.setText(String.format("#%02X%02X%02X",
+                    color.getRed(), color.getGreen(), color.getBlue()));
+
+            int alphaPercent = currentAlpha * 100 / 255;
+            alphaSlider.setValue(alphaPercent);
+            alphaField.setText(alphaPercent + "%");
+
+            colorPreviewCircle.repaint();
+        }
     }
 
     public Color getColor() {

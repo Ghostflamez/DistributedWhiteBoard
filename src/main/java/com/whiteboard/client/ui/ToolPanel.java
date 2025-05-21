@@ -236,7 +236,7 @@ public class ToolPanel extends JToolBar {
 
     // 在ToolPanel类中添加橡皮擦控制
     private void setupEraserButton() {
-        JButton eraserButton = new JButton("ERASER");
+        JButton eraserButton = new JButton("Eraser");
 
         // 创建橡皮擦选项面板
         JPopupMenu eraserMenu = new JPopupMenu();

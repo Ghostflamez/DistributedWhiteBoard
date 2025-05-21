@@ -19,24 +19,53 @@ import java.util.function.Consumer;
 
 public class AdvancedColorPanel extends JPanel {
     private Color currentColor = Color.BLACK;
+    private Color originalColor = Color.BLACK; // 保存原始颜色，用于取消操作
+    private Color lastAppliedColor = Color.BLACK; // 保存最后应用的颜色
     private JPanel colorPreview;
     private JSlider redSlider, greenSlider, blueSlider, alphaSlider;
     private JTextField redField, greenField, blueField, alphaField, hexField;
     private Consumer<Color> colorChangeListener;
     private boolean updatingControls = false;
+    private JButton okButton, applyButton, cancelButton;
+    private Dialog ownerDialog; // 引用包含此面板的对话框
+    private boolean confirmed = false; // 跟踪用户是确认还是取消
 
     public AdvancedColorPanel(Color initialColor, Consumer<Color> colorChangeListener) {
-        this.currentColor = initialColor;
+        this.currentColor = initialColor != null ? initialColor : Color.BLACK;
+        this.originalColor = new Color(
+                currentColor.getRed(),
+                currentColor.getGreen(),
+                currentColor.getBlue(),
+                currentColor.getAlpha()
+        ); // 保存初始颜色的副本
+        this.lastAppliedColor = this.originalColor; // 初始时，最后应用的颜色与原始颜色相同
         this.colorChangeListener = colorChangeListener;
 
         setLayout(new BorderLayout(10, 10));
         setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+
+        // 主面板（包含颜色预览和控件）
+        JPanel mainPanel = new JPanel(new BorderLayout(10, 10));
 
         // Color preview panel on the left
         colorPreview = new JPanel() {
             @Override
             protected void paintComponent(Graphics g) {
                 super.paintComponent(g);
+                // 绘制棋盘背景以显示透明度
+                int squareSize = 8;
+                for (int i = 0; i < getWidth(); i += squareSize) {
+                    for (int j = 0; j < getHeight(); j += squareSize) {
+                        if ((i / squareSize + j / squareSize) % 2 == 0) {
+                            g.setColor(Color.LIGHT_GRAY);
+                        } else {
+                            g.setColor(Color.WHITE);
+                        }
+                        g.fillRect(i, j, squareSize, squareSize);
+                    }
+                }
+
+                // 绘制当前颜色
                 g.setColor(currentColor);
                 g.fillRect(0, 0, getWidth(), getHeight());
 
@@ -46,15 +75,24 @@ public class AdvancedColorPanel extends JPanel {
             }
         };
         colorPreview.setPreferredSize(new Dimension(80, 80));
-        add(colorPreview, BorderLayout.WEST);
+        mainPanel.add(colorPreview, BorderLayout.WEST);
 
         // Controls panel on the right
         JPanel controlsPanel = new JPanel();
         controlsPanel.setLayout(new BoxLayout(controlsPanel, BoxLayout.Y_AXIS));
 
         // Hex color field
-        JPanel hexPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        hexPanel.add(new JLabel("Hex:"));
+        JPanel hexPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        hexPanel.setBorder(BorderFactory.createEmptyBorder(0, 0, 5, 0));
+
+        // 使用固定宽度的标签面板
+        JPanel hexLabelPanel = new JPanel();
+        hexLabelPanel.setLayout(new BorderLayout());
+        hexLabelPanel.setPreferredSize(new Dimension(50, 20));
+        JLabel hexLabel = new JLabel("Hex:");
+        hexLabelPanel.add(hexLabel, BorderLayout.WEST);
+        hexPanel.add(hexLabelPanel);
+
         hexField = new JTextField(7);
         hexField.setText(String.format("#%02X%02X%02X",
                 currentColor.getRed(), currentColor.getGreen(), currentColor.getBlue()));
@@ -69,7 +107,7 @@ public class AdvancedColorPanel extends JPanel {
         hexPanel.add(hexField);
         controlsPanel.add(hexPanel);
 
-        // RGB sliders
+        // RGB sliders - 使用相同的面板和标签宽度
         controlsPanel.add(createColorSlider("Red", redSlider = new JSlider(0, 255, currentColor.getRed()),
                 redField = new JTextField(3), Color.RED));
         controlsPanel.add(createColorSlider("Green", greenSlider = new JSlider(0, 255, currentColor.getGreen()),
@@ -81,20 +119,82 @@ public class AdvancedColorPanel extends JPanel {
         controlsPanel.add(createColorSlider("Alpha", alphaSlider = new JSlider(0, 255, currentColor.getAlpha()),
                 alphaField = new JTextField(3), Color.GRAY));
 
-        add(controlsPanel, BorderLayout.CENTER);
+        mainPanel.add(controlsPanel, BorderLayout.CENTER);
+
+        // 添加按钮面板
+        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+
+        okButton = new JButton("OK");
+        okButton.addActionListener(e -> {
+            confirmed = true;
+            notifyColorChange(); // 确认时通知颜色更改
+            lastAppliedColor = new Color(
+                currentColor.getRed(),
+                currentColor.getGreen(),
+                currentColor.getBlue(),
+                currentColor.getAlpha()
+            ); // 更新最后应用的颜色
+            if (ownerDialog != null) {
+                ownerDialog.dispose();
+            }
+        });
+
+        applyButton = new JButton("Apply");
+        applyButton.addActionListener(e -> {
+            notifyColorChange(); // 应用时通知颜色更改
+            lastAppliedColor = new Color(
+                currentColor.getRed(),
+                currentColor.getGreen(),
+                currentColor.getBlue(),
+                currentColor.getAlpha()
+            ); // 更新最后应用的颜色
+            // 不关闭对话框
+        });
+
+        cancelButton = new JButton("Cancel");
+        cancelButton.addActionListener(e -> {
+            confirmed = false;
+            // 还原到原始颜色
+            currentColor = originalColor;
+            // 不通知颜色变化，直接关闭
+            if (ownerDialog != null) {
+                ownerDialog.dispose();
+            }
+        });
+
+        buttonPanel.add(okButton);
+        buttonPanel.add(applyButton);
+        buttonPanel.add(cancelButton);
+
+        // 添加主面板和按钮面板
+        add(mainPanel, BorderLayout.CENTER);
+        add(buttonPanel, BorderLayout.SOUTH);
 
         // Initialize field values
         updateControlsFromColor();
     }
 
+    // 设置拥有此面板的对话框引用
+    public void setOwnerDialog(Dialog ownerDialog) {
+        this.ownerDialog = ownerDialog;
+    }
+
     private JPanel createColorSlider(String name, JSlider slider, JTextField field, Color labelColor) {
         JPanel panel = new JPanel();
         panel.setLayout(new BorderLayout(5, 0));
+        panel.setBorder(BorderFactory.createEmptyBorder(3, 0, 3, 0));
 
+        // 使用固定宽度的标签面板确保对齐
+        JPanel labelPanel = new JPanel();
+        labelPanel.setLayout(new BorderLayout());
+        labelPanel.setPreferredSize(new Dimension(50, 20));
         JLabel label = new JLabel(name);
         label.setForeground(labelColor);
-        panel.add(label, BorderLayout.WEST);
+        labelPanel.add(label, BorderLayout.WEST);
+        panel.add(labelPanel, BorderLayout.WEST);
 
+        // 滑块设置
+        slider.setPreferredSize(new Dimension(150, 20));
         slider.addChangeListener(e -> {
             if (!updatingControls) {
                 updatingControls = true;
@@ -105,11 +205,18 @@ public class AdvancedColorPanel extends JPanel {
         });
         panel.add(slider, BorderLayout.CENTER);
 
+        // 文本框设置
         field.setText(String.valueOf(slider.getValue()));
+        field.setPreferredSize(new Dimension(40, 20));
         configureNumberField(field, 0, 255);
         field.getDocument().addDocumentListener(new TextFieldListener(field, slider));
         field.addActionListener(e -> updateColorFromFields());
-        panel.add(field, BorderLayout.EAST);
+
+        // 把文本框放在一个固定宽度的面板中
+        JPanel fieldPanel = new JPanel(new BorderLayout());
+        fieldPanel.setPreferredSize(new Dimension(45, 20));
+        fieldPanel.add(field, BorderLayout.CENTER);
+        panel.add(fieldPanel, BorderLayout.EAST);
 
         return panel;
     }
@@ -162,7 +269,9 @@ public class AdvancedColorPanel extends JPanel {
         hexField.setText(String.format("#%02X%02X%02X",
                 currentColor.getRed(), currentColor.getGreen(), currentColor.getBlue()));
         colorPreview.repaint();
-        notifyColorChange();
+
+        // 实时预览颜色，但不需要确认
+        // 我们将等待OK按钮点击后才正式通知
     }
 
     private void updateColorFromFields() {
@@ -187,7 +296,8 @@ public class AdvancedColorPanel extends JPanel {
                 currentColor = new Color(r, g, b, a);
                 hexField.setText(String.format("#%02X%02X%02X", r, g, b));
                 colorPreview.repaint();
-                notifyColorChange();
+
+                // 实时预览颜色，但不需要确认
             } catch (NumberFormatException e) {
                 // Ignore invalid input
             }
@@ -216,7 +326,8 @@ public class AdvancedColorPanel extends JPanel {
 
                     currentColor = new Color(r, g, b, a);
                     colorPreview.repaint();
-                    notifyColorChange();
+
+                    // 实时预览颜色，但不需要确认
                 }
             } catch (Exception e) {
                 // Restore valid hex on error
@@ -248,12 +359,29 @@ public class AdvancedColorPanel extends JPanel {
     }
 
     public void setColor(Color color) {
-        this.currentColor = color;
-        updateControlsFromColor();
+        if (color != null) {
+            this.currentColor = color;
+            this.originalColor = new Color(
+                    color.getRed(),
+                    color.getGreen(),
+                    color.getBlue(),
+                    color.getAlpha()
+            ); // 保存初始颜色副本
+            this.lastAppliedColor = this.originalColor; // 重置最后应用的颜色
+            updateControlsFromColor();
+        }
     }
 
     public Color getColor() {
         return currentColor;
+    }
+
+    public Color getLastAppliedColor() {
+        return lastAppliedColor;
+    }
+
+    public boolean isConfirmed() {
+        return confirmed;
     }
 
     private void notifyColorChange() {
