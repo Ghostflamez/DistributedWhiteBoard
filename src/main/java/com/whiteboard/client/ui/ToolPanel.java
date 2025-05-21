@@ -220,7 +220,8 @@ public class ToolPanel extends JToolBar {
             } else if (currentTool instanceof EraserTool) {
                 // 更新橡皮擦大小，保持当前模式
                 EraserTool oldEraserTool = (EraserTool) currentTool;
-                EraserTool newEraserTool = new EraserTool(Math.toIntExact(Math.round(width * 1.25))); // 橡皮擦尺寸为线宽的1.25倍
+                EraserTool newEraserTool = new EraserTool(Math.toIntExact(Math.round(width * 1.25)),
+                        whiteboardPanel.getBackground());
                 // 设置橡皮擦模式
                 newEraserTool.setMode(oldEraserTool.getMode());
                 whiteboardPanel.setCurrentTool(newEraserTool);
@@ -318,7 +319,7 @@ public class ToolPanel extends JToolBar {
     private void createEraserWithCurrentSettings(EraserTool.EraseMode mode) {
         int currentSize = getCurrentStrokeWidth();
         int eraserSize = (int) Math.round(currentSize * 1.25); // 橡皮擦尺寸为笔刷大小的1.25倍
-        EraserTool eraserTool = new EraserTool(eraserSize);
+        EraserTool eraserTool = new EraserTool(eraserSize, whiteboardPanel.getBackground());
         eraserTool.setMode(mode);
         whiteboardPanel.setCurrentTool(eraserTool);
     }

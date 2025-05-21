@@ -1,9 +1,14 @@
 package com.whiteboard.client.tools;
 
 import com.whiteboard.client.shapes.Shape;
+import com.whiteboard.client.shapes.FreeDrawing;
 import java.awt.Point;
+import java.awt.Color;
 import java.util.ArrayList;
 import java.util.List;
+import java.awt.Color;
+import com.whiteboard.client.shapes.ErasureShape;
+import com.whiteboard.client.shapes.FreeDrawing;
 
 public class EraserTool implements DrawingTool {
     // 擦除模式枚举
@@ -21,41 +26,95 @@ public class EraserTool implements DrawingTool {
         }
     }
 
-    private EraseMode mode = EraseMode.FREE; // default mode
+    private FreeDrawing currentErasure;
+    private Color backgroundColor;
     private int eraserSize;
     private Point currentPoint;
+    private EraseMode mode = EraseMode.FREE; // 默认为自由擦除模式
+    private List<Point> erasePath = new ArrayList<>();
     private List<Shape> shapesToRemove = new ArrayList<>();
-    private List<Shape> shapesToPreview = new ArrayList<>(); // 预览透明度改变的形状
-    private List<Point> erasePath = new ArrayList<>(); // 记录橡皮擦轨迹
+    private List<Shape> shapesToPreview = new ArrayList<>();
+    private boolean released = false;
 
-    public EraserTool(int eraserSize) {
+    public EraserTool(int eraserSize, Color backgroundColor) {
         this.eraserSize = eraserSize;
+        this.backgroundColor = backgroundColor;
     }
 
     @Override
     public void mousePressed(Point p) {
-        currentPoint = p;
+        // 使用背景色创建FreeDrawing对象
+        currentErasure = new FreeDrawing(p, backgroundColor, eraserSize);
         erasePath.clear();
         erasePath.add(p);
-
-        if (mode == EraseMode.OBJECT) {
-            // 对象擦除模式
-            shapesToPreview.clear();
-        }
+        currentPoint = p;
+        released = false;
     }
 
     @Override
     public void mouseDragged(Point p) {
-        currentPoint = p;
-        erasePath.add(p);
+        if (currentErasure != null) {
+            addPointWithInterpolation(p);
+            currentPoint = p;
+        }
+    }
+
+    @Override
+    public void mouseReleased(Point p) {
+        if (currentErasure != null) {
+            currentErasure.addPoint(p);
+            erasePath.add(p);
+            currentPoint = p;
+            released = true;
+        }
     }
 
     @Override
     public Shape getCreatedShape() {
-        // 橡皮擦不创建形状，返回null
-        return null;
+        return currentErasure;
     }
 
+    public void resetErasureShape() {
+        currentErasure = null;
+    }
+
+    // 添加带插值的点，解决快速移动时的路径不连续问题
+    private void addPointWithInterpolation(Point newPoint) {
+        if (erasePath.isEmpty()) {
+            erasePath.add(newPoint);
+            currentErasure.addPoint(newPoint);
+            return;
+        }
+
+        // 获取最后一个点
+        Point lastPoint = erasePath.get(erasePath.size() - 1);
+
+        // 计算距离
+        double distance = lastPoint.distance(newPoint);
+
+        // 如果距离太大，插入中间点
+        if (distance > 10) { // 10像素作为阈值
+            int steps = (int)(distance / 5) + 1; // 每5像素一个点
+
+            for (int i = 1; i < steps; i++) {
+                double ratio = (double)i / steps;
+                int x = (int)(lastPoint.x + (newPoint.x - lastPoint.x) * ratio);
+                int y = (int)(lastPoint.y + (newPoint.y - lastPoint.y) * ratio);
+
+                Point interpolatedPoint = new Point(x, y);
+                erasePath.add(interpolatedPoint);
+                currentErasure.addPoint(interpolatedPoint);
+            }
+        }
+
+        // 添加新点
+        erasePath.add(newPoint);
+        currentErasure.addPoint(newPoint);
+    }
+
+
+
+    // Getters and setters
     public void setMode(EraseMode mode) {
         this.mode = mode;
     }
@@ -113,18 +172,6 @@ public class EraserTool implements DrawingTool {
     }
     public void setCurrentPoint(Point p) {
         this.currentPoint = p;
-    }
-    // 在EraserTool类中添加释放状态标志
-    private boolean released = false;
-
-
-    @Override
-    public void mouseReleased(Point p) {
-        currentPoint = p;
-        erasePath.add(p);
-        released = true; // 设置释放标志
-
-        // 实际擦除逻辑将在WhiteboardPanel中处理
     }
 
     public boolean isReleased() {

@@ -23,7 +23,7 @@ public class ToolFactory {
             case TEXT:
                 return new TextTool(color, new Font("Arial", Font.PLAIN, 14));
             case ERASER:
-                return new EraserTool(strokeWidth * 5);
+                return new EraserTool((int)Math.round(strokeWidth * 1.5), Color.WHITE);
             default:
                 return new PencilTool(color, strokeWidth);
         }

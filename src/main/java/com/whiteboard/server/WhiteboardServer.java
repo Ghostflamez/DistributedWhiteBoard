@@ -215,17 +215,20 @@ public class WhiteboardServer implements IWhiteboardServer {
             // 清除白板状态
             whiteboardState.clear();
 
-            // 广播清除操作给所有客户端（包括发送者）
-            for (Map.Entry<String, IWhiteboardClient> entry : clientCallbacks.entrySet()) {
-                try {
-                    entry.getValue().receiveClearCanvas();
-                    logger.info("Sent clear canvas command to: " + entry.getKey());
-                } catch (RemoteException e) {
-                    logger.warning("Error sending canvas clear to client: " + e.getMessage());
-                }
+        // 广播清除操作给所有客户端 - 删除条件检查，向所有人广播
+        for (Map.Entry<String, IWhiteboardClient> entry : clientCallbacks.entrySet()) {
+            try {
+                entry.getValue().receiveClearCanvas();
+                logger.info("Sent clear canvas notification to: " + entry.getKey());
+            } catch (RemoteException e) {
+                logger.warning("Error sending canvas clear to client: " + e.getMessage());
             }
         }
+    } else {
+        logger.warning("Non-manager attempted to clear canvas: " + sessionId);
+        throw new RemoteException("Only manager can clear canvas");
     }
+}
 
     @Override
     public List<Shape> getAllShapes() throws RemoteException {

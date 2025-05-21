@@ -370,6 +370,10 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
             SwingUtilities.invokeLater(() -> {
                 joinWaitingDialog.dispose();
                 joinWaitingDialog = null;
+
+                if (frame != null) {
+                    frame.setEnabled(true); // 重新启用主窗口
+                }
             });
         }
 
@@ -450,16 +454,18 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
 
     @Override
     public void receiveClearCanvas() throws RemoteException {
-        if (uiInitialized && frame != null) {
-            SwingUtilities.invokeLater(() -> {
-                frame.getWhiteboardPanel().clearCanvas();
-            });
-        } else {
-            // 缓存更新
-            pendingClearCanvas = true;
-            logger.info("Cached clear canvas notification");
-        }
+    logger.info("Received clear canvas command from server");
+    if (uiInitialized && frame != null) {
+        SwingUtilities.invokeLater(() -> {
+            frame.getWhiteboardPanel().clearCanvas();
+            logger.info("Canvas cleared successfully");
+        });
+    } else {
+        // 缓存更新
+        pendingClearCanvas = true;
+        logger.info("Cached clear canvas notification");
     }
+}
 
     // 其他方法保持不变...
 
@@ -822,7 +828,14 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
      */
     private void createWaitingDialog() {
         SwingUtilities.invokeLater(() -> {
-            JDialog waitingDialog = new JDialog((Frame)null, "Waiting for Approval", false);
+            // 首先找到主窗口，作为父窗口
+            Frame parent = null;
+            if (frame != null) {
+                parent = frame;
+            }
+
+            // 创建模态对话框
+            JDialog waitingDialog = new JDialog((Frame)null, "Waiting for Approval", true);
             waitingDialog.setLayout(new BorderLayout());
 
             JPanel panel = new JPanel(new BorderLayout(10, 10));
@@ -854,7 +867,7 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
 
             waitingDialog.add(panel);
             waitingDialog.pack();
-            waitingDialog.setLocationRelativeTo(null);
+            waitingDialog.setLocationRelativeTo(frame); // 居中显示
             waitingDialog.setDefaultCloseOperation(JDialog.DO_NOTHING_ON_CLOSE);
             waitingDialog.addWindowListener(new WindowAdapter() {
                 @Override
@@ -863,10 +876,13 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
                 }
             });
 
-            // 存储对话框引用，以便在批准后关闭
+            // 存储引用
             joinWaitingDialog = waitingDialog;
 
-            waitingDialog.setVisible(true);
+            // 由于模态对话框会阻塞 EDT 线程，所以在新线程中显示它
+            new Thread(() -> {
+                waitingDialog.setVisible(true);
+            }).start();
         });
     }
 

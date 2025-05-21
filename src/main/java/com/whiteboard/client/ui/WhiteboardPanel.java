@@ -102,18 +102,25 @@ public class WhiteboardPanel extends JPanel {
                         }
                     }
                 } else if (currentTool instanceof EraserTool) {
-                    // 橡皮擦工具处理...
+                    // 橡皮擦工具处理
                     EraserTool eraserTool = (EraserTool) currentTool;
-                    // 完成擦除后
-                    Shape erasureShape = eraserTool.getCreatedShape(); // 需要确保返回适当的形状
+                    eraserTool.mouseReleased(e.getPoint());
+
+                    // 获取擦除形状并发送到服务器
+                    Shape erasureShape = eraserTool.getCreatedShape();
                     if (erasureShape != null) {
                         shapes.add(erasureShape);
 
-                        // 通知服务器
+                        // 发送到服务器
                         if (drawingListener != null) {
                             drawingListener.accept(erasureShape);
                         }
+
+                        // 重置工具
+                        eraserTool.resetErasureShape();
                     }
+
+                    repaint();
                 } else {
                     // 其他工具处理
                     currentTool.mouseReleased(e.getPoint());
@@ -421,6 +428,11 @@ public class WhiteboardPanel extends JPanel {
                 Shape textShape = textTool.getCreatedShape();
                 if (textShape != null) {
                     shapes.add(textShape);
+
+                    // 通知服务器 - 确保这一行存在
+                    if (drawingListener != null) {
+                        drawingListener.accept(textShape);
+                    }
                 }
 
                 dialog.dispose();
@@ -636,7 +648,8 @@ public class WhiteboardPanel extends JPanel {
         } else if (currentTool instanceof PencilTool) {
             currentTool = new PencilTool(currentColor, currentStrokeWidth);
         } else if (currentTool instanceof EraserTool) {
-            currentTool = new EraserTool(currentStrokeWidth * 5); // 橡皮擦尺寸为线宽的5倍
+            currentTool = new EraserTool(Math.toIntExact(Math.round(currentStrokeWidth * 1.25)),
+                    getBackground());
         }
         // TextTool不受线宽影响
     }
@@ -666,7 +679,7 @@ public class WhiteboardPanel extends JPanel {
             } else if (currentTool instanceof EraserTool) {
                 EraserTool eraserTool = (EraserTool) currentTool;
                 int size = eraserTool.getEraserSize();
-                currentTool = new EraserTool(size);
+                currentTool = new EraserTool(size, getBackground());
             }
         }
 
