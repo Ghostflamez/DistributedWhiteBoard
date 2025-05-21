@@ -13,6 +13,7 @@ public class TextTool implements DrawingTool {
     private String text = "";
     private Point position;
     private boolean isEditing = false;
+    private Point currentPosition;
 
     public TextTool(Color color, Font font) {
         this.color = color;
@@ -33,6 +34,7 @@ public class TextTool implements DrawingTool {
 
     public void startEditing() {
         isEditing = true;
+        text = "";
         if (position != null) {
             // 创建预览文本
             currentText = new Text(position, text, color, font);
@@ -87,5 +89,12 @@ public class TextTool implements DrawingTool {
 
     public String getText() {
         return text;
+    }
+
+    // 为了完全清除状态，可以添加一个重置方法
+    public void reset() {
+        text = "";
+        currentText = null;
+        isEditing = false;
     }
 }
