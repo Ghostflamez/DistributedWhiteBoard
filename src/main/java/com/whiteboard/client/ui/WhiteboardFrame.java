@@ -10,6 +10,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Timer;
 import java.util.TimerTask;
+import java.util.logging.Logger;
 
 public class WhiteboardFrame extends JFrame {
     private WhiteboardPanel whiteboardPanel;
@@ -29,6 +30,9 @@ public class WhiteboardFrame extends JFrame {
     private ColorSelectionPanel colorSelectionPanel; // 新添加
     private boolean useNewColorSelector = true; // 控制开关
     private Map<String, JDialog> pendingUserDialogs = new HashMap<>();
+
+    //
+    private static final Logger logger = Logger.getLogger(WhiteboardFrame.class.getName());
 
     public WhiteboardFrame(String title, boolean isManager, WhiteboardClient client) {
         super(title);
@@ -200,6 +204,13 @@ public class WhiteboardFrame extends JFrame {
      * 更新用户列表
      */
     public void updateUserList(List<String> users) {
+        if (users == null) {
+            logger.warning("Received null user list");
+            return;
+        }
+
+        logger.info("Updating user list: " + users);
+
         SwingUtilities.invokeLater(() -> {
             userListModel.clear();
             for (String username : users) {
@@ -207,7 +218,6 @@ public class WhiteboardFrame extends JFrame {
             }
         });
     }
-
     /**
      * 踢出用户（仅管理员）
      */
@@ -357,6 +367,8 @@ public class WhiteboardFrame extends JFrame {
      * 显示用户加入请求对话框
      */
     public void showJoinRequest(String username, boolean isOnline) {
+        logger.info("Showing join request from: " + username + " (online: " + isOnline + ")");
+
         SwingUtilities.invokeLater(() -> {
             // 检查是否已有该用户的对话框
             JDialog existingDialog = pendingUserDialogs.get(username);

@@ -63,32 +63,50 @@ public class WhiteboardServer implements IWhiteboardServer {
     @Override
     public boolean approveUser(String username, String managerId) throws RemoteException {
         logger.info("Manager " + managerId + " approving user: " + username);
-        if (userManager.isManager(managerId)) {
-            boolean approved = userManager.approveUser(username, managerId);
-            if (approved) {
-                // 获取用户会话ID
-                User user = userManager.getUserByUsername(username);
-                if (user != null) {
-                    String userSessionId = user.getSessionId();
+        if (!userManager.isManager(managerId)) {
+            logger.warning("Non-manager " + managerId + " attempted to approve user: " + username);
+            return false;
+        }
 
-                    // 通知用户已批准
-                    IWhiteboardClient client = clientCallbacks.get(userSessionId);
-                    if (client != null) {
-                        try {
-                            client.notifyManagerDecision(true);
-                            logger.info("Notified user " + username + " of approval");
-                        } catch (RemoteException e) {
-                            logger.warning("Error notifying user of approval: " + e.getMessage());
-                        }
-                    }
+        // 查找用户并批准
+        boolean approved = userManager.approveUser(username, managerId);
+        if (!approved) {
+            logger.warning("Failed to approve user: " + username);
+            return false;
+        }
 
-                    // 广播更新的用户列表
-                    broadcastUserList();
-                }
-                return true;
+        // 获取用户会话ID
+        User user = userManager.getUserByUsername(username);
+        if (user == null) {
+            logger.warning("Approved user not found: " + username);
+            return false;
+        }
+
+        String userSessionId = user.getSessionId();
+        logger.info("User approved: " + username + ", sessionId: " + userSessionId);
+
+        // 通知用户已批准
+        IWhiteboardClient client = clientCallbacks.get(userSessionId);
+        if (client == null) {
+            // 用户回调尚未注册，将其放入待处理的批准通知队列
+            logger.info("Client callback not found for " + username + ", deferring notification");
+            // 注: 可以添加队列来处理延迟通知，但这里我们假设客户端会再次发送请求
+        } else {
+            try {
+                client.notifyManagerDecision(true);
+                logger.info("Notified user " + username + " of approval");
+            } catch (RemoteException e) {
+                logger.warning("Error notifying user of approval: " + e.getMessage());
+                // 移除可能中断的客户端
+                clientCallbacks.remove(userSessionId);
             }
         }
-        return false;
+
+        // 广播更新的用户列表
+        broadcastUserList();
+        logger.info("User list broadcasted after approval");
+
+        return true;
     }
 
     @Override
@@ -197,14 +215,13 @@ public class WhiteboardServer implements IWhiteboardServer {
             // 清除白板状态
             whiteboardState.clear();
 
-            // 广播清除操作给所有客户端
+            // 广播清除操作给所有客户端（包括发送者）
             for (Map.Entry<String, IWhiteboardClient> entry : clientCallbacks.entrySet()) {
-                if (!entry.getKey().equals(sessionId)) { // 不需要发回给发送者
-                    try {
-                        entry.getValue().receiveClearCanvas();
-                    } catch (RemoteException e) {
-                        logger.warning("Error sending canvas clear to client: " + e.getMessage());
-                    }
+                try {
+                    entry.getValue().receiveClearCanvas();
+                    logger.info("Sent clear canvas command to: " + entry.getKey());
+                } catch (RemoteException e) {
+                    logger.warning("Error sending canvas clear to client: " + e.getMessage());
                 }
             }
         }
@@ -219,34 +236,40 @@ public class WhiteboardServer implements IWhiteboardServer {
     @Override
     public void registerClient(String sessionId, IWhiteboardClient client) throws RemoteException {
         logger.info("Registering client callback for session: " + sessionId);
-        try {
-            // 验证会话ID
-            if (sessionId == null) {
-                logger.warning("Attempt to register client with null session ID");
-                return;
-            }
 
-            // 检查用户权限
-            if (!userManager.isConnectedUser(sessionId) && !userManager.isManager(sessionId)) {
-                logger.warning("Attempt to register unauthorized client: " + sessionId);
-                return;
-            }
+        // 验证会话ID
+        if (sessionId == null) {
+            logger.warning("Attempt to register client with null session ID");
+            throw new RemoteException("Invalid session ID");
+        }
 
-            // 注册回调
-            clientCallbacks.put(sessionId, client);
+        // 检查用户是否存在
+        User user = userManager.getUserBySessionId(sessionId);
+        if (user == null) {
+            logger.warning("Unknown user trying to register client: " + sessionId);
+            throw new RemoteException("Unknown user");
+        }
 
-            // 发送初始状态
+        boolean isUserManager = userManager.isManager(sessionId);
+        boolean isApproved = userManager.isApproved(userManager.getUidBySessionId(sessionId));
+
+        // Register callback for all valid users (including unapproved users)
+        clientCallbacks.put(sessionId, client);
+        logger.info("Client callback registered for: " + user.getUsername() +
+                " (Manager: " + isUserManager + ", Approved: " + isApproved + ")");
+
+        // Only send initial state to managers and approved users
+        if (isUserManager || isApproved) {
             sendInitialState(sessionId);
+        }
 
+        // Only managers and approved users see the user list
+        if (isUserManager || isApproved) {
             // 广播用户列表
             broadcastUserList();
-
-            logger.info("Client registered successfully: " + sessionId);
-        } catch (Exception e) {
-            logger.severe("Error registering client: " + e.getMessage());
-            throw new RemoteException("Failed to register client", e);
         }
     }
+
 
     @Override
     public void unregisterClient(String sessionId) throws RemoteException {
@@ -339,11 +362,19 @@ public class WhiteboardServer implements IWhiteboardServer {
     // 辅助方法
     private void broadcastUserList() {
         List<String> usernames = userManager.getConnectedUsernames();
-        for (IWhiteboardClient client : clientCallbacks.values()) {
+        logger.info("Broadcasting user list: " + usernames);
+
+        for (Map.Entry<String, IWhiteboardClient> entry : clientCallbacks.entrySet()) {
             try {
-                client.updateUserList(usernames);
+                entry.getValue().updateUserList(usernames);
             } catch (RemoteException e) {
-                logger.warning("Error broadcasting user list: " + e.getMessage());
+                logger.warning("Error broadcasting user list to " + entry.getKey() + ": " + e.getMessage());
+                // 考虑移除断开的客户端
+                if (e.getCause() instanceof java.net.ConnectException) {
+                    String sessionToRemove = entry.getKey();
+                    clientCallbacks.remove(sessionToRemove);
+                    logger.warning("Removed disconnected client from callbacks: " + sessionToRemove);
+                }
             }
         }
     }
@@ -392,19 +423,31 @@ public class WhiteboardServer implements IWhiteboardServer {
      */
     private void sendInitialState(String sessionId) {
         IWhiteboardClient client = clientCallbacks.get(sessionId);
-        if (client != null) {
-            try {
-                // 发送所有现有形状
-                List<Shape> shapes = whiteboardState.getShapes();
-                for (Shape shape : shapes) {
-                    client.updateShape(shape);
-                }
-                logger.info("Sent initial state to client: " + sessionId + " (" + shapes.size() + " shapes)");
-            } catch (RemoteException e) {
-                logger.warning("Error sending initial state to client: " + e.getMessage());
+        if (client == null) {
+            logger.warning("Cannot send initial state - client not registered: " + sessionId);
+            return;
+        }
+
+        try {
+            // 发送所有现有形状
+            List<Shape> shapes = whiteboardState.getShapes();
+            logger.info("Sending initial state to " + sessionId + ": " + shapes.size() + " shapes");
+
+            for (Shape shape : shapes) {
+                client.updateShape(shape);
             }
+
+            // 发送用户列表
+            List<String> users = userManager.getConnectedUsernames();
+            client.updateUserList(users);
+
+            logger.info("Initial state sent successfully to: " + sessionId);
+        } catch (RemoteException e) {
+            logger.warning("Error sending initial state to client: " + e.getMessage());
+            clientCallbacks.remove(sessionId);
         }
     }
+
 
     // 并发控制方法
     private String calculateRegionId(int x, int y) {
@@ -432,25 +475,29 @@ public class WhiteboardServer implements IWhiteboardServer {
 
         // 检查是否已批准
         if (userManager.isApproved(uid)) {
+            logger.info("User already approved: " + username);
+
             // 已批准则直接通知用户
             IWhiteboardClient client = clientCallbacks.get(sessionId);
             if (client != null) {
                 try {
                     client.notifyManagerDecision(true);
+                    logger.info("Re-notified approved user: " + username);
                 } catch (RemoteException e) {
                     logger.warning("Error notifying approved user: " + e.getMessage());
+                    clientCallbacks.remove(sessionId);
                 }
             }
             return;
         }
 
-        // 如果未批准且不在等待列表，则通知管理员
+        // 如果未批准且不在等待列表，则直接返回
         if (!userManager.isPendingUser(sessionId)) {
             logger.warning("User not in pending list: " + sessionId);
             return;
         }
 
-        // 通知管理员
+        // 通知管理员有用户请求加入
         notifyManagerAboutPendingUser(username);
     }
 
@@ -459,20 +506,31 @@ public class WhiteboardServer implements IWhiteboardServer {
      */
     private void notifyManagerAboutPendingUser(String username) {
         String managerId = userManager.getManagerId();
-        if (managerId != null) {
-            IWhiteboardClient managerClient = clientCallbacks.get(managerId);
-            if (managerClient != null) {
-                try {
-                    // 检查用户是否在线
-                    User user = userManager.getUserByUsername(username);
-                    boolean isOnline = (user != null &&
-                            (System.currentTimeMillis() - user.getLastActivity()) <= 10000);
+        if (managerId == null) {
+            logger.warning("No manager available to notify about pending user: " + username);
+            return;
+        }
 
-                    managerClient.notifyPendingJoinRequest(username, isOnline);
-                    logger.info("Notified manager about pending user: " + username);
-                } catch (RemoteException e) {
-                    logger.warning("Failed to notify manager about pending user: " + e.getMessage());
-                }
+        IWhiteboardClient managerClient = clientCallbacks.get(managerId);
+        if (managerClient == null) {
+            logger.warning("Manager client callback not found, cannot notify about: " + username);
+            return;
+        }
+
+        try {
+            // 检查用户是否在线
+            User user = userManager.getUserByUsername(username);
+            boolean isOnline = (user != null &&
+                    (System.currentTimeMillis() - user.getLastActivity()) <= 10000);
+
+            managerClient.notifyPendingJoinRequest(username, isOnline);
+            logger.info("Notified manager about pending user: " + username + " (online: " + isOnline + ")");
+        } catch (RemoteException e) {
+            logger.warning("Failed to notify manager about pending user: " + e.getMessage());
+            // 考虑从回调列表中移除断开的管理员
+            if (e.getCause() instanceof java.net.ConnectException) {
+                clientCallbacks.remove(managerId);
+                logger.warning("Removed disconnected manager from callbacks");
             }
         }
     }

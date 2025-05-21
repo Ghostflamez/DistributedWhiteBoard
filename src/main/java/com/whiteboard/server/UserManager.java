@@ -86,6 +86,8 @@ public class UserManager {
      * @return 是否成功批准
      */
     public synchronized boolean approveUser(String username, String managerId) {
+        logger.info("Manager " + managerId + " approving user " + username);
+
         if (!isManager(managerId)) {
             logger.warning("Non-manager attempted to approve user: " + username);
             return false;
@@ -103,17 +105,20 @@ public class UserManager {
             }
         }
 
-        if (pendingSessionId != null && targetUid != null) {
-            User user = pendingUsers.get(pendingSessionId);
-            pendingUsers.remove(pendingSessionId);
-            connectedUsers.put(pendingSessionId, user);
-            approvedUids.add(targetUid);  // 添加到已批准列表
-            logger.info("User approved: " + username + ", UID: " + targetUid);
-            return true;
+        if (pendingSessionId == null || targetUid == null) {
+            logger.warning("User not found in pending list: " + username);
+            return false;
         }
 
-        logger.warning("User not found in pending list: " + username);
-        return false;
+        User user = pendingUsers.get(pendingSessionId);
+        pendingUsers.remove(pendingSessionId);
+        connectedUsers.put(pendingSessionId, user);
+        approvedUids.add(targetUid);  // 添加到已批准列表
+
+        logger.info("User approved and moved to connected: " + username +
+                ", UID: " + targetUid + ", SessionID: " + pendingSessionId);
+
+        return true;
     }
 
     /**
@@ -122,7 +127,9 @@ public class UserManager {
      * @return 是否已批准
      */
     public boolean isApproved(String uid) {
-        return approvedUids.contains(uid);
+        boolean approved = approvedUids.contains(uid);
+        logger.fine("Checking approval status for UID " + uid + ": " + approved);
+        return approved;
     }
 
     /**

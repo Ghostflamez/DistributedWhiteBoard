@@ -28,37 +28,37 @@ public class ToolPanel extends JToolBar {
         // 铅笔工具按钮
         JButton pencilButton = new JButton("Pencil");
         pencilButton.addActionListener(e ->
-                whiteboardPanel.setCurrentTool(new PencilTool(Color.BLACK, getCurrentStrokeWidth())));
+                whiteboardPanel.setCurrentTool(new PencilTool(whiteboardPanel.getCurrentColor(), getCurrentStrokeWidth())));
         add(pencilButton);
 
         // 线条按钮
         JButton lineButton = new JButton("Line");
         lineButton.addActionListener(e ->
-                whiteboardPanel.setCurrentTool(new LineTool(Color.BLACK, getCurrentStrokeWidth())));
+                whiteboardPanel.setCurrentTool(new LineTool(whiteboardPanel.getCurrentColor(), getCurrentStrokeWidth())));
         add(lineButton);
 
         // 矩形按钮
         JButton rectButton = new JButton("Rectangle");
         rectButton.addActionListener(e ->
-                whiteboardPanel.setCurrentTool(new RectangleTool(Color.BLACK, getCurrentStrokeWidth())));
+                whiteboardPanel.setCurrentTool(new RectangleTool(whiteboardPanel.getCurrentColor(), getCurrentStrokeWidth())));
         add(rectButton);
 
         // 椭圆按钮
         JButton ovalButton = new JButton("Oval");
         ovalButton.addActionListener(e ->
-                whiteboardPanel.setCurrentTool(new OvalTool(Color.BLACK, getCurrentStrokeWidth())));
+                whiteboardPanel.setCurrentTool(new OvalTool(whiteboardPanel.getCurrentColor(), getCurrentStrokeWidth())));
         add(ovalButton);
 
         // 三角形按钮
         JButton triangleButton = new JButton("Triangle");
         triangleButton.addActionListener(e ->
-                whiteboardPanel.setCurrentTool(new TriangleTool(Color.BLACK, getCurrentStrokeWidth())));
+                whiteboardPanel.setCurrentTool(new TriangleTool(whiteboardPanel.getCurrentColor(), getCurrentStrokeWidth())));
         add(triangleButton);
 
         // 文本按钮
         JButton textButton = new JButton("Text");
         textButton.addActionListener(e ->
-                whiteboardPanel.setCurrentTool(new TextTool(Color.BLACK,
+                whiteboardPanel.setCurrentTool(new TextTool(whiteboardPanel.getCurrentColor(),
                         new Font("Arial", Font.PLAIN, getCurrentFontSize()))));
         add(textButton);
 

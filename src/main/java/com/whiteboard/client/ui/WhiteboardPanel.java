@@ -89,17 +89,31 @@ public class WhiteboardPanel extends JPanel {
             @Override
             public void mouseReleased(MouseEvent e) {
                 if (currentTool instanceof TextTool) {
-                    // 文本工具不处理释放
-                    return;
-                } else if (currentTool instanceof EraserTool) {
-                    // 橡皮擦工具处理
-                    EraserTool eraserTool = (EraserTool) currentTool;
-                    eraserTool.mouseReleased(e.getPoint());
-                    processEraser(eraserTool);
+                    // 文本工具处理...
+                    TextTool textTool = (TextTool) currentTool;
+                    // 完成编辑后
+                    Shape textShape = textTool.getCreatedShape();
+                    if (textShape != null) {
+                        shapes.add(textShape);
 
-                    // 确保路径被清除
-                    eraserTool.clearPath();
-                    repaint();
+                        // 通知服务器
+                        if (drawingListener != null) {
+                            drawingListener.accept(textShape);
+                        }
+                    }
+                } else if (currentTool instanceof EraserTool) {
+                    // 橡皮擦工具处理...
+                    EraserTool eraserTool = (EraserTool) currentTool;
+                    // 完成擦除后
+                    Shape erasureShape = eraserTool.getCreatedShape(); // 需要确保返回适当的形状
+                    if (erasureShape != null) {
+                        shapes.add(erasureShape);
+
+                        // 通知服务器
+                        if (drawingListener != null) {
+                            drawingListener.accept(erasureShape);
+                        }
+                    }
                 } else {
                     // 其他工具处理
                     currentTool.mouseReleased(e.getPoint());
