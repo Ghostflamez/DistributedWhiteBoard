@@ -3,7 +3,11 @@ package com.whiteboard.client.ui;
 import javax.swing.*;
 import java.awt.*;
 import java.awt.event.ActionListener;
-
+/**
+ * @deprecated This class is deprecated and will be removed in future releases.
+ * Use {@link ColorSelectionPanel} instead.
+ */
+@Deprecated
 public class ColorPanel extends JPanel {
     private WhiteboardPanel whiteboardPanel;
 

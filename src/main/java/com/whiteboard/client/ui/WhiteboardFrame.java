@@ -11,6 +11,10 @@ public class WhiteboardFrame extends JFrame {
     private ColorPanel colorPanel;
     private boolean isManager = false;
 
+    // 新添加的颜色选择器
+    private ColorSelectionPanel colorSelectionPanel; // 新添加
+    private boolean useNewColorSelector = true; // 控制开关
+
     public WhiteboardFrame(String title, boolean isManager) {
         super(title);
         this.isManager = isManager;
@@ -22,7 +26,14 @@ public class WhiteboardFrame extends JFrame {
     private void initComponents() {
         whiteboardPanel = new WhiteboardPanel();
         toolPanel = new ToolPanel(whiteboardPanel);
-        colorPanel = new ColorPanel(whiteboardPanel);
+        // 条件创建颜色选择器
+        if (useNewColorSelector) {
+            colorSelectionPanel = new ColorSelectionPanel(Color.BLACK, color -> {
+                whiteboardPanel.setCurrentColor(color);
+            });
+        } else {
+            colorPanel = new ColorPanel(whiteboardPanel);
+        }
 
         whiteboardPanel.setToolPanel(toolPanel);
     }
@@ -37,6 +48,13 @@ public class WhiteboardFrame extends JFrame {
 
         // 添加颜色面板
         add(colorPanel, BorderLayout.SOUTH);
+
+        // 条件添加颜色选择器
+        if (useNewColorSelector) {
+            add(colorSelectionPanel, BorderLayout.SOUTH);
+        } else {
+            add(colorPanel, BorderLayout.SOUTH);
+        }
 
         // 添加画布
         JScrollPane scrollPane = new JScrollPane(whiteboardPanel);
