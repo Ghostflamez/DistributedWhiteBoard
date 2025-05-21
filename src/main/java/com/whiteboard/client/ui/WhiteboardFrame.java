@@ -46,9 +46,6 @@ public class WhiteboardFrame extends JFrame {
         // 添加工具栏
         add(toolPanel, BorderLayout.NORTH);
 
-        // 添加颜色面板
-        add(colorPanel, BorderLayout.SOUTH);
-
         // 条件添加颜色选择器
         if (useNewColorSelector) {
             add(colorSelectionPanel, BorderLayout.SOUTH);
