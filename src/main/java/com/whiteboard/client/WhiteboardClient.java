@@ -563,9 +563,18 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
     public boolean newWhiteboard() {
         if (isConnected && isManager) {
             try {
-                // 在服务器清除画布
                 server.clearCanvas(sessionId);
                 currentFilename = null;
+
+                // 显示成功消息
+                if (uiInitialized && frame != null) {
+                    SwingUtilities.invokeLater(() -> {
+                        JOptionPane.showMessageDialog(frame,
+                                "New whiteboard created successfully.",
+                                "New Whiteboard",
+                                JOptionPane.INFORMATION_MESSAGE);
+                    });
+                }
                 return true;
             } catch (RemoteException e) {
                 logger.warning("Error creating new whiteboard: " + e.getMessage());
@@ -579,53 +588,161 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
      * 保存白板
      */
     public boolean saveWhiteboard() {
-        if (isConnected && isManager && currentFilename != null) {
+        if (!isConnected || !isManager) {
+            return false;
+        }
+
+        // 如果有当前文件名，直接保存
+        if (currentFilename != null && !currentFilename.trim().isEmpty()) {
             try {
-                return server.saveWhiteboard(currentFilename, sessionId);
+                boolean success = server.saveWhiteboard(currentFilename, sessionId);
+                if (success) {
+                    // 显示成功消息
+                    if (uiInitialized && frame != null) {
+                        SwingUtilities.invokeLater(() -> {
+                            JOptionPane.showMessageDialog(frame,
+                                    "Whiteboard saved successfully.",
+                                    "Save Successful",
+                                    JOptionPane.INFORMATION_MESSAGE);
+                        });
+                    }
+                } else {
+                    // 显示错误消息
+                    if (uiInitialized && frame != null) {
+                        SwingUtilities.invokeLater(() -> {
+                            JOptionPane.showMessageDialog(frame,
+                                    "Failed to save whiteboard.",
+                                    "Save Failed",
+                                    JOptionPane.ERROR_MESSAGE);
+                        });
+                    }
+                }
+                return success;
             } catch (RemoteException e) {
                 logger.warning("Error saving whiteboard: " + e.getMessage());
                 handleConnectionError(e);
+                return false;
             }
+        } else {
+            // 如果没有当前文件名，调用另存为
+            return saveWhiteboardAs(null);
         }
-        return false;
     }
 
     /**
      * 另存为
      */
+    /**
+     * 另存为
+     */
     public boolean saveWhiteboardAs(String filename) {
-        if (isConnected && isManager) {
-            try {
-                boolean success = server.saveWhiteboard(filename, sessionId);
-                if (success) {
-                    this.currentFilename = filename;
-                }
-                return success;
-            } catch (RemoteException e) {
-                logger.warning("Error saving whiteboard: " + e.getMessage());
-                handleConnectionError(e);
-            }
+        if (!isConnected || !isManager) {
+            return false;
         }
-        return false;
+
+        // Save As 总是弹出对话框，即使传入了文件名
+        String inputFilename = JOptionPane.showInputDialog(frame,
+                "Enter filename:",
+                "Save Whiteboard As",
+                JOptionPane.PLAIN_MESSAGE);
+
+        if (inputFilename == null || inputFilename.trim().isEmpty()) {
+            return false; // 用户取消
+        }
+
+        final String finalFilename = inputFilename.trim();
+
+        try {
+            boolean success = server.saveWhiteboard(finalFilename, sessionId);
+            if (success) {
+                this.currentFilename = finalFilename; // 更新当前文件名
+
+                // 显示成功消息
+                if (uiInitialized && frame != null) {
+                    SwingUtilities.invokeLater(() -> {
+                        JOptionPane.showMessageDialog(frame,
+                                "Whiteboard saved successfully as: " + finalFilename,
+                                "Save As Successful",
+                                JOptionPane.INFORMATION_MESSAGE);
+                    });
+                }
+            } else {
+                // 显示错误消息
+                if (uiInitialized && frame != null) {
+                    SwingUtilities.invokeLater(() -> {
+                        JOptionPane.showMessageDialog(frame,
+                                "Failed to save whiteboard as: " + finalFilename,
+                                "Save As Failed",
+                                JOptionPane.ERROR_MESSAGE);
+                    });
+                }
+            }
+            return success;
+        } catch (RemoteException e) {
+            logger.warning("Error saving whiteboard: " + e.getMessage());
+            handleConnectionError(e);
+            return false;
+        }
     }
 
     /**
      * 加载白板
      */
+    /**
+     * 加载白板
+     */
     public boolean loadWhiteboard(String filename) {
-        if (isConnected && isManager) {
-            try {
-                boolean success = server.loadWhiteboard(filename, sessionId);
-                if (success) {
-                    this.currentFilename = filename;
-                }
-                return success;
-            } catch (RemoteException e) {
-                logger.warning("Error loading whiteboard: " + e.getMessage());
-                handleConnectionError(e);
-            }
+        if (!isConnected || !isManager) {
+            return false;
         }
-        return false;
+
+        // 如果没有提供文件名，弹出对话框
+        if (filename == null) {
+            filename = JOptionPane.showInputDialog(frame,
+                    "Enter filename to load:",
+                    "Load Whiteboard",
+                    JOptionPane.PLAIN_MESSAGE);
+
+            if (filename == null || filename.trim().isEmpty()) {
+                return false; // 用户取消
+            }
+            filename = filename.trim();
+        }
+
+        // 创建final副本供lambda使用
+        final String finalFilename = filename;
+
+        try {
+            boolean success = server.loadWhiteboard(finalFilename, sessionId);
+            if (success) {
+                this.currentFilename = finalFilename;
+
+                // 显示成功消息
+                if (uiInitialized && frame != null) {
+                    SwingUtilities.invokeLater(() -> {
+                        JOptionPane.showMessageDialog(frame,
+                                "Whiteboard loaded successfully: " + finalFilename,
+                                "Load Successful",
+                                JOptionPane.INFORMATION_MESSAGE);
+                    });
+                }
+            } else {
+                // 显示错误消息
+                if (uiInitialized && frame != null) {
+                    SwingUtilities.invokeLater(() -> {
+                        JOptionPane.showMessageDialog(frame,
+                                "Failed to load whiteboard: " + finalFilename + "\nFile may not exist.",
+                                "Load Failed",
+                                JOptionPane.ERROR_MESSAGE);
+                    });
+                }
+            }
+            return success;
+        } catch (RemoteException e) {
+            logger.warning("Error loading whiteboard: " + e.getMessage());
+            handleConnectionError(e);
+            return false;
+        }
     }
 
     /**

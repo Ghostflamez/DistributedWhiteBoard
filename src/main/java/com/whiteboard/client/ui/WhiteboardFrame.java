@@ -329,16 +329,28 @@ public class WhiteboardFrame extends JFrame {
     // 文件菜单功能（暂时只是占位方法）
     private void newWhiteboard() {
         if (client != null && client.isManager()) {
-            try {
-                logger.info("Initiating new whiteboard from menu");
-                client.clearCanvas(); // This will clear locally and send to server
-                logger.info("New whiteboard command sent to server");
-            } catch (Exception e) {
-                logger.severe("Error creating new whiteboard: " + e.getMessage());
-                JOptionPane.showMessageDialog(this,
-                        "Error creating new whiteboard: " + e.getMessage(),
-                        "Error",
-                        JOptionPane.ERROR_MESSAGE);
+            int response = JOptionPane.showConfirmDialog(this,
+                    "Create a new whiteboard? This will clear the current content.",
+                    "New Whiteboard",
+                    JOptionPane.YES_NO_OPTION,
+                    JOptionPane.QUESTION_MESSAGE);
+
+            if (response == JOptionPane.YES_OPTION) {
+                try {
+                    boolean success = client.newWhiteboard();
+                    if (!success) {
+                        JOptionPane.showMessageDialog(this,
+                                "Failed to create new whiteboard.",
+                                "Error",
+                                JOptionPane.ERROR_MESSAGE);
+                    }
+                } catch (Exception e) {
+                    logger.severe("Error creating new whiteboard: " + e.getMessage());
+                    JOptionPane.showMessageDialog(this,
+                            "Error creating new whiteboard: " + e.getMessage(),
+                            "Error",
+                            JOptionPane.ERROR_MESSAGE);
+                }
             }
         } else {
             JOptionPane.showMessageDialog(this,
@@ -349,18 +361,45 @@ public class WhiteboardFrame extends JFrame {
     }
 
     private void openWhiteboard() {
-        // TODO: 实现打开白板功能
-        JOptionPane.showMessageDialog(this, "Open whiteboard functionality not implemented yet.");
+        if (client != null && client.isManager()) {
+            boolean success = client.loadWhiteboard(null); // null会弹出输入对话框
+            if (!success) {
+                // 错误信息已在client中显示
+            }
+        } else {
+            JOptionPane.showMessageDialog(this,
+                    "Only the manager can load whiteboards.",
+                    "Permission Denied",
+                    JOptionPane.WARNING_MESSAGE);
+        }
     }
 
     private void saveWhiteboard() {
-        // TODO: 实现保存白板功能
-        JOptionPane.showMessageDialog(this, "Save whiteboard functionality not implemented yet.");
+        if (client != null && client.isManager()) {
+            boolean success = client.saveWhiteboard();
+            if (!success) {
+                // 错误信息已在client中显示
+            }
+        } else {
+            JOptionPane.showMessageDialog(this,
+                    "Only the manager can save whiteboards.",
+                    "Permission Denied",
+                    JOptionPane.WARNING_MESSAGE);
+        }
     }
 
     private void saveWhiteboardAs() {
-        // TODO: 实现另存为功能
-        JOptionPane.showMessageDialog(this, "Save As functionality not implemented yet.");
+        if (client != null && client.isManager()) {
+            boolean success = client.saveWhiteboardAs(null); // null会弹出输入对话框
+            if (!success) {
+                // 错误信息已在client中显示
+            }
+        } else {
+            JOptionPane.showMessageDialog(this,
+                    "Only the manager can save whiteboards.",
+                    "Permission Denied",
+                    JOptionPane.WARNING_MESSAGE);
+        }
     }
 
     private void closeApplication() {

@@ -5,6 +5,7 @@ import com.whiteboard.common.model.User;
 import com.whiteboard.common.model.WhiteboardState;
 import com.whiteboard.common.remote.IWhiteboardClient;
 import com.whiteboard.common.remote.IWhiteboardServer;
+import com.whiteboard.common.model.WhiteboardSaveData;
 
 import java.io.*;
 import java.rmi.RemoteException;
@@ -279,60 +280,97 @@ public class WhiteboardServer implements IWhiteboardServer {
     public boolean saveWhiteboard(String filename, String sessionId) throws RemoteException {
         logger.info("Saving whiteboard to: " + filename);
 
-        // 检查用户权限（只有管理员可以保存）
-        if (userManager.isManager(sessionId)) {
-            try {
-                FileOutputStream fileOut = new FileOutputStream(filename);
-                ObjectOutputStream out = new ObjectOutputStream(fileOut);
-                out.writeObject(whiteboardState);
-                out.close();
-                fileOut.close();
-                logger.info("Whiteboard saved successfully");
-                return true;
-            } catch (IOException e) {
-                logger.severe("Error saving whiteboard: " + e.getMessage());
-                return false;
-            }
+        if (!userManager.isManager(sessionId)) {
+            logger.warning("Non-manager attempted to save: " + sessionId);
+            return false;
         }
-        return false;
+
+        try {
+            // 确保文件扩展名
+            if (!filename.endsWith(".wbd")) {
+                filename += ".wbd";
+            }
+
+            // 创建保存目录
+            File saveDir = new File("whiteboards");
+            if (!saveDir.exists()) {
+                saveDir.mkdirs();
+            }
+
+            File saveFile = new File(saveDir, filename);
+
+            // 保存白板状态
+            try (FileOutputStream fileOut = new FileOutputStream(saveFile);
+                 ObjectOutputStream out = new ObjectOutputStream(fileOut)) {
+
+                // 创建保存数据对象
+                WhiteboardSaveData saveData = new WhiteboardSaveData();
+                saveData.shapes = whiteboardState.getShapes();
+                saveData.version = whiteboardState.getVersion();
+                saveData.timestamp = System.currentTimeMillis();
+                saveData.createdBy = userManager.getUserBySessionId(sessionId).getUsername();
+
+                out.writeObject(saveData);
+                out.flush();
+
+                logger.info("Whiteboard saved successfully to: " + saveFile.getAbsolutePath());
+                return true;
+            }
+        } catch (IOException e) {
+            logger.severe("Error saving whiteboard: " + e.getMessage());
+            e.printStackTrace();
+            return false;
+        }
     }
 
     @Override
     public boolean loadWhiteboard(String filename, String sessionId) throws RemoteException {
         logger.info("Loading whiteboard from: " + filename);
 
-        // 检查用户权限（只有管理员可以加载）
-        if (userManager.isManager(sessionId)) {
-            try {
-                FileInputStream fileIn = new FileInputStream(filename);
-                ObjectInputStream in = new ObjectInputStream(fileIn);
-                whiteboardState = (WhiteboardState) in.readObject();
-                in.close();
-                fileIn.close();
-                logger.info("Whiteboard loaded successfully");
+        if (!userManager.isManager(sessionId)) {
+            logger.warning("Non-manager attempted to load: " + sessionId);
+            return false;
+        }
 
-                // 广播新状态给所有客户端
-                for (Map.Entry<String, IWhiteboardClient> entry : clientCallbacks.entrySet()) {
-                    try {
-                        // 清除当前画布
-                        entry.getValue().receiveClearCanvas();
+        try {
+            // 确保文件扩展名
+            if (!filename.endsWith(".wbd")) {
+                filename += ".wbd";
+            }
 
-                        // 发送所有形状
-                        for (Shape shape : whiteboardState.getShapes()) {
-                            entry.getValue().updateShape(shape);
-                        }
-                    } catch (RemoteException e) {
-                        logger.warning("Error sending loaded whiteboard to client: " + e.getMessage());
-                    }
-                }
-
-                return true;
-            } catch (IOException | ClassNotFoundException e) {
-                logger.severe("Error loading whiteboard: " + e.getMessage());
+            File loadFile = new File("whiteboards", filename);
+            if (!loadFile.exists()) {
+                logger.warning("File not found: " + loadFile.getAbsolutePath());
                 return false;
             }
+
+            // 加载白板状态
+            try (FileInputStream fileIn = new FileInputStream(loadFile);
+                 ObjectInputStream in = new ObjectInputStream(fileIn)) {
+
+                WhiteboardSaveData saveData = (WhiteboardSaveData) in.readObject();
+
+                // 清除当前状态
+                whiteboardState.clear();
+
+                // 设置新状态
+                for (Shape shape : saveData.shapes) {
+                    whiteboardState.addShape(shape);
+                }
+
+                logger.info("Whiteboard loaded successfully from: " + loadFile.getAbsolutePath());
+                logger.info("Loaded " + saveData.shapes.size() + " shapes, created by: " + saveData.createdBy);
+
+                // 广播清除和新状态给所有客户端
+                broadcastFullReload();
+
+                return true;
+            }
+        } catch (IOException | ClassNotFoundException e) {
+            logger.severe("Error loading whiteboard: " + e.getMessage());
+            e.printStackTrace();
+            return false;
         }
-        return false;
     }
 
     // 聊天功能实现
@@ -736,5 +774,26 @@ public class WhiteboardServer implements IWhiteboardServer {
                 performActiveHeartbeatCheck();
             }
         }, 10000, 10000); // 每10秒进行一次主动检测
+    }
+
+    private void broadcastFullReload() {
+        logger.info("Broadcasting full whiteboard reload to all clients");
+
+        for (Map.Entry<String, IWhiteboardClient> entry : clientCallbacks.entrySet()) {
+            try {
+                // 先清除
+                entry.getValue().receiveClearCanvas();
+
+                // 再发送所有形状
+                List<Shape> shapes = whiteboardState.getShapes();
+                for (Shape shape : shapes) {
+                    entry.getValue().updateShape(shape);
+                }
+
+                logger.info("Sent full reload to client: " + entry.getKey());
+            } catch (RemoteException e) {
+                logger.warning("Error sending full reload to client: " + e.getMessage());
+            }
+        }
     }
 }
