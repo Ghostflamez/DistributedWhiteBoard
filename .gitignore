@@ -1,0 +1,217 @@
+# Java编译输出
+*.class
+*.jar
+*.war
+*.ear
+*.nar
+hs_err_pid*
+replay_pid*
+
+# Maven构建目录
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.jar
+
+# Gradle构建目录
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+# IDE相关文件
+## IntelliJ IDEA
+.idea/
+*.iws
+*.iml
+*.ipr
+out/
+!**/src/main/**/out/
+!**/src/test/**/out/
+
+## Eclipse
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+bin/
+!**/src/main/**/bin/
+!**/src/test/**/bin/
+
+## VSCode
+.vscode/
+
+## NetBeans
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+
+# 操作系统文件
+## macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+## Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.tmp
+*.temp
+Desktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+## Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# 日志文件
+logs/
+*.log
+*.log.*
+*.out
+
+# 配置文件（包含敏感信息）
+application-*.yml
+application-*.yaml
+application-*.properties
+!application-example.yml
+!application-example.yaml
+!application-example.properties
+bootstrap-*.yml
+bootstrap-*.yaml
+bootstrap-*.properties
+!bootstrap-example.yml
+!bootstrap-example.yaml
+!bootstrap-example.properties
+
+# 数据库相关
+*.db
+*.sqlite
+*.sqlite3
+h2/
+hsqldb/
+
+# 缓存和临时文件
+.cache/
+tmp/
+temp/
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# 分布式系统特定
+## 服务发现和配置中心
+eureka-client/cache/
+consul-data/
+zookeeper-data/
+etcd-data/
+
+## 消息队列
+kafka-logs/
+activemq-data/
+rabbitmq-data/
+
+## 缓存
+redis-data/
+elasticsearch-data/
+lucene-index/
+
+## 容器相关
+docker-compose.override.yml
+.dockerignore
+Dockerfile.local
+
+## Kubernetes
+k8s-secrets/
+*.kubeconfig
+
+# 性能分析和监控
+*.hprof
+*.jfr
+*.prof
+heapdump*
+javacore*
+Snap.*
+
+# 打包和部署
+dist/
+release/
+deploy/
+*.zip
+*.tar.gz
+*.tgz
+
+# 开发工具
+.gradle-cache/
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# 环境变量文件
+.env
+.env.local
+.env.*.local
+
+# 备份文件
+*.bak
+*.backup
+*.orig
+
+# 测试覆盖率报告
+coverage/
+*.lcov
+jacoco.exec
+jacoco-it.exec
+
+# 文档生成
+site/
+docs/_build/
+
+# 安全密钥
+*.pem
+*.key
+*.crt
+*.p12
+*.jks
+keystore
+truststore
