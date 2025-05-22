@@ -6,6 +6,8 @@ import com.whiteboard.client.shapes.Rectangle;
 import com.whiteboard.client.shapes.Oval;
 import com.whiteboard.client.shapes.Line;
 import com.whiteboard.client.shapes.Triangle;
+import com.whiteboard.client.WhiteboardClient;
+
 import javax.swing.*;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
@@ -14,6 +16,8 @@ import java.awt.event.*;
 import java.util.List;
 import java.util.function.Consumer;
 import java.util.logging.Logger;
+import java.util.HashMap;
+import java.util.Map;
 
 
 import com.whiteboard.client.tools.*;
@@ -28,6 +32,10 @@ public class WhiteboardPanel extends JPanel {
     private ToolPanel toolPanel;
     private Point currentPoint;
     private Consumer<Shape> drawingListener;
+
+    // 预览功能相关
+    private Map<String, Shape> userPreviews = new HashMap<>(); // username -> preview shape
+    private boolean isDrawing = false; // 标记是否正在绘制
 
     private static final Logger logger = Logger.getLogger(WhiteboardPanel.class.getName());
 
@@ -64,10 +72,12 @@ public class WhiteboardPanel extends JPanel {
                     // 橡皮擦处理
                     EraserTool eraserTool = (EraserTool) currentTool;
                     eraserTool.mousePressed(e.getPoint());
+                    isDrawing = true; // 开始绘制
                     processEraser(eraserTool);
                 } else {
                     // 其他工具处理
                     currentTool.mousePressed(e.getPoint());
+                    isDrawing = true; // 开始绘制
                     repaint();
                 }
             }
@@ -81,10 +91,26 @@ public class WhiteboardPanel extends JPanel {
                     // 橡皮擦处理
                     EraserTool eraserTool = (EraserTool) currentTool;
                     eraserTool.mouseDragged(e.getPoint());
+                    // 添加橡皮擦预览支持
+                    if (isDrawing) {
+                        Shape previewShape = eraserTool.getCreatedShape();
+                        if (previewShape != null) {
+                            sendPreviewUpdate(previewShape);
+                        }
+                    }
                     processEraser(eraserTool);
                 } else {
                     // 其他工具处理
                     currentTool.mouseDragged(e.getPoint());
+
+                    // 实时预览：发送当前绘制状态给其他客户端
+                    if (isDrawing) {
+                        Shape previewShape = currentTool.getCreatedShape();
+                        if (previewShape != null) {
+                            sendPreviewUpdate(previewShape);
+                        }
+                    }
+
                     repaint();
                 }
             }
@@ -109,6 +135,11 @@ public class WhiteboardPanel extends JPanel {
                     EraserTool eraserTool = (EraserTool) currentTool;
                     eraserTool.mouseReleased(e.getPoint());
 
+                    if (isDrawing) {
+                        clearPreview();
+                        isDrawing = false;
+                    }
+
                     // 获取擦除形状并发送到服务器
                     Shape erasureShape = eraserTool.getCreatedShape();
                     if (erasureShape != null) {
@@ -127,6 +158,13 @@ public class WhiteboardPanel extends JPanel {
                 } else {
                     // 其他工具处理
                     currentTool.mouseReleased(e.getPoint());
+
+                    // 清除预览
+                    if (isDrawing) {
+                        clearPreview();
+                        isDrawing = false;
+                    }
+
                     Shape shape = currentTool.getCreatedShape();
                     if (shape != null) {
                         shapes.add(shape);
@@ -157,6 +195,56 @@ public class WhiteboardPanel extends JPanel {
         addMouseMotionListener(mouseAdapter);
     }
 
+    // ================== 预览功能相关方法 ==================
+
+    /**
+     * 更新其他用户的预览
+     */
+    public void updatePreview(Shape previewShape, String fromUser) {
+        logger.fine("Updating preview from user: " + fromUser);
+        userPreviews.put(fromUser, previewShape);
+        repaint();
+    }
+
+    /**
+     * 清除特定用户的预览
+     */
+    public void clearPreview(String fromUser) {
+        logger.fine("Clearing preview from user: " + fromUser);
+        userPreviews.remove(fromUser);
+        repaint();
+    }
+
+    /**
+     * 发送预览更新到服务器
+     */
+    private void sendPreviewUpdate(Shape shape) {
+        Window window = SwingUtilities.getWindowAncestor(this);
+        if (window instanceof WhiteboardFrame) {
+            WhiteboardFrame frame = (WhiteboardFrame) window;
+            WhiteboardClient client = frame.getClient();
+            if (client != null) {
+                client.sendPreviewUpdate(shape);
+            }
+        }
+    }
+
+    /**
+     * 清除预览
+     */
+    private void clearPreview() {
+        Window window = SwingUtilities.getWindowAncestor(this);
+        if (window instanceof WhiteboardFrame) {
+            WhiteboardFrame frame = (WhiteboardFrame) window;
+            WhiteboardClient client = frame.getClient();
+            if (client != null) {
+                client.clearPreview();
+            }
+        }
+    }
+
+    // ================== 橡皮擦处理方法 ==================
+
     private void processEraser(EraserTool eraserTool) {
         if (eraserTool.getCurrentPoint() == null) return;
 
@@ -172,116 +260,6 @@ public class WhiteboardPanel extends JPanel {
         }
 
         repaint();
-    }
-
-    // 修改对象擦除处理方法
-    private void processObjectEraser(EraserTool eraserTool, Point p, int size) {
-        // 创建橡皮擦圆形区域
-        java.awt.geom.Ellipse2D eraserShape =
-                new java.awt.geom.Ellipse2D.Double(p.x - size/2, p.y - size/2, size, size);
-
-        // 检查哪些形状与橡皮擦相交
-        List<Shape> toPreview = new ArrayList<>();
-
-        for (Shape shape : shapes) {
-            // 检测相交 - 简化版实现，可以根据需要改进
-            if (eraserIntersectsShape(eraserShape, shape)) {
-                toPreview.add(shape);
-            }
-        }
-
-        // 清除之前的预览但现在不在预览列表中的形状
-        for (Shape shape : eraserTool.getShapesToPreview()) {
-            if (!toPreview.contains(shape)) {
-                // 不再预览的形状，恢复正常
-                shape.clearTempAlpha();
-            }
-        }
-
-        // 设置新的预览
-        eraserTool.clearShapesToPreview();
-
-        for (Shape shape : toPreview) {
-            // 设置半透明预览（50%透明度）
-            shape.setTempAlpha(127); // 半透明，Alpha值为127
-            eraserTool.addShapeToPreview(shape);
-        }
-
-        // 鼠标松开时才执行实际擦除
-        if (!eraserTool.getErasePath().isEmpty() &&
-                p.equals(eraserTool.getErasePath().get(eraserTool.getErasePath().size() - 1))) {
-
-            // 移除所有预览中的形状
-            shapes.removeAll(eraserTool.getShapesToPreview());
-            eraserTool.clearShapesToPreview();
-
-            // 清除路径
-            eraserTool.clearPath();
-        }
-
-        repaint();
-    }
-
-    // 检查橡皮擦与形状相交的逻辑（改进版）
-    private boolean eraserIntersectsShape(java.awt.geom.Ellipse2D eraser, Shape shape) {
-        // 1. 检查形状的起点和终点是否在橡皮擦范围内
-        if (eraser.contains(shape.getStartPoint()) || eraser.contains(shape.getEndPoint())) {
-            return true;
-        }
-
-        // 2. 对于特定类型的形状，执行更精确的检测
-        if (shape instanceof Line) {
-            Line line = (Line) shape;
-            // 使用Line2D检测直线与圆的相交
-            java.awt.geom.Line2D lineShape = new java.awt.geom.Line2D.Double(
-                    line.getStartPoint(), line.getEndPoint());
-
-            // 圆的边界矩形
-            double x = eraser.getX();
-            double y = eraser.getY();
-            double w = eraser.getWidth();
-            double h = eraser.getHeight();
-
-            // 检测线段是否与圆相交
-            return lineShape.intersects(x, y, w, h);
-        }
-        else if (shape instanceof Rectangle) {
-            Rectangle rect = (Rectangle) shape;
-            // 创建Rectangle2D对象
-            java.awt.geom.Rectangle2D rectShape = createRectangleFromShape(rect);
-            // 检测矩形是否与圆相交
-            return rectShape.intersects(eraser.getX(), eraser.getY(), eraser.getWidth(), eraser.getHeight());
-        }
-        else if (shape instanceof Oval) {
-            Oval oval = (Oval) shape;
-            // 创建Ellipse2D对象
-            java.awt.geom.Ellipse2D ovalShape = createEllipseFromShape(oval);
-            // 检测椭圆是否与圆相交 - 近似检测
-            return ovalShape.intersects(eraser.getX(), eraser.getY(), eraser.getWidth(), eraser.getHeight());
-        }
-
-        // 3. 对于其他类型或更复杂的形状，使用简化检测
-        return shape.contains(new Point((int)eraser.getCenterX(), (int)eraser.getCenterY()));
-    }
-
-    // 辅助方法：从形状创建Rectangle2D对象
-    private java.awt.geom.Rectangle2D createRectangleFromShape(Rectangle rect) {
-        int x = Math.min(rect.getStartPoint().x, rect.getEndPoint().x);
-        int y = Math.min(rect.getStartPoint().y, rect.getEndPoint().y);
-        int width = Math.abs(rect.getEndPoint().x - rect.getStartPoint().x);
-        int height = Math.abs(rect.getEndPoint().y - rect.getStartPoint().y);
-
-        return new java.awt.geom.Rectangle2D.Double(x, y, width, height);
-    }
-
-    // 辅助方法：从形状创建Ellipse2D对象
-    private java.awt.geom.Ellipse2D createEllipseFromShape(Oval oval) {
-        int x = Math.min(oval.getStartPoint().x, oval.getEndPoint().x);
-        int y = Math.min(oval.getStartPoint().y, oval.getEndPoint().y);
-        int width = Math.abs(oval.getEndPoint().x - oval.getStartPoint().x);
-        int height = Math.abs(oval.getEndPoint().y - oval.getStartPoint().y);
-
-        return new java.awt.geom.Ellipse2D.Double(x, y, width, height);
     }
 
     // 修改WhiteboardPanel中的processFreeEraser方法
@@ -312,24 +290,7 @@ public class WhiteboardPanel extends JPanel {
         repaint();
     }
 
-    // 检查线段是否与形状相交
-    private boolean lineIntersectsShape(java.awt.geom.Line2D line, Shape shape, double tolerance) {
-        // 检查多个点沿线段是否与形状相交
-        for (int i = 0; i <= 10; i++) {
-            double t = i / 10.0;
-            int x = (int)(line.getX1() * (1-t) + line.getX2() * t);
-            int y = (int)(line.getY1() * (1-t) + line.getY2() * t);
-
-            Point p = new Point(x, y);
-
-            // 计算点到形状的距离
-            if (shape.contains(p)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
+    // ================== 文本输入对话框 ==================
 
     // 修改文本输入对话框方法，使用固定字体确保支持Unicode字符
     private void showTextInputDialog(TextTool textTool) {
@@ -524,6 +485,19 @@ public class WhiteboardPanel extends JPanel {
         for (Shape shape : shapes) {
             shape.draw(g2d);
         }
+
+        // 绘制其他用户的预览（半透明）
+        Composite originalComposite = g2d.getComposite();
+        for (Map.Entry<String, Shape> entry : userPreviews.entrySet()) {
+            Shape previewShape = entry.getValue();
+            if (previewShape != null) {
+                // 设置透明度
+                g2d.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.6f));
+                previewShape.draw(g2d);
+            }
+        }
+        // 恢复透明度
+        g2d.setComposite(originalComposite);
 
         // 绘制当前正在创建的形状
         if (currentTool != null) {
@@ -752,7 +726,20 @@ public class WhiteboardPanel extends JPanel {
 
     public void addShape(Shape shape) {
         if (shape != null) {
+            System.out.println("DEBUG: Adding shape " + shape.getClass().getSimpleName() +
+                    " with timestamp " + shape.getTimestamp());
             shapes.add(shape);
+
+            // 按时间戳排序
+            shapes.sort((s1, s2) -> Long.compare(s1.getTimestamp(), s2.getTimestamp()));
+
+            System.out.println("DEBUG: After sorting, shapes order:");
+            for (int i = 0; i < shapes.size(); i++) {
+                Shape s = shapes.get(i);
+                System.out.println("  " + i + ": " + s.getClass().getSimpleName() +
+                        " (timestamp: " + s.getTimestamp() + ")");
+            }
+
             repaint();
         }
     }

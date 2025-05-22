@@ -29,4 +29,8 @@ public interface IWhiteboardServer extends Remote {
     void requestJoin(String username, String sessionId) throws RemoteException;
     void rejectUser(String username, String managerId) throws RemoteException;
     void updateUserActivity(String sessionId) throws RemoteException;
+
+    // 新增预览方法
+    void updatePreview(Shape previewShape, String sessionId) throws RemoteException;
+    void clearPreview(String sessionId) throws RemoteException;
 }

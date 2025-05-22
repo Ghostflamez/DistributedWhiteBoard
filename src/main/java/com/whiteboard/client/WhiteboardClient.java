@@ -54,6 +54,10 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
     private boolean pendingKicked = false;
     private boolean pendingClearCanvas = false;
 
+    // 预览相关
+    private Timer previewTimer;
+    private Shape currentPreviewShape;
+
     private static class ChatMessage {
         final String sender;
         final String message;
@@ -1042,5 +1046,93 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
 
     public boolean isManager() {
         return isManager;
+    }
+
+
+    // preview相关方法
+    @Override
+    public void receivePreviewUpdate(Shape previewShape, String fromUser) throws RemoteException {
+        if (uiInitialized && frame != null) {
+            SwingUtilities.invokeLater(() -> {
+                frame.getWhiteboardPanel().updatePreview(previewShape, fromUser);
+            });
+        }
+    }
+
+    @Override
+    public void receivePreviewClear(String fromUser) throws RemoteException {
+        if (uiInitialized && frame != null) {
+            SwingUtilities.invokeLater(() -> {
+                frame.getWhiteboardPanel().clearPreview(fromUser);
+            });
+        }
+    }
+
+    // 发送预览更新
+    public void sendPreviewUpdate(Shape shape) {
+        if (isConnected && (isManager || isApproved)) {
+            try {
+                server.updatePreview(shape, sessionId);
+            } catch (RemoteException e) {
+                logger.warning("Error sending preview update: " + e.getMessage());
+            }
+        }
+    }
+
+    // 清除预览
+    public void clearPreview() {
+        if (isConnected && (isManager || isApproved)) {
+            try {
+                server.clearPreview(sessionId);
+            } catch (RemoteException e) {
+                logger.warning("Error clearing preview: " + e.getMessage());
+            }
+        }
+    }
+
+    @Override
+    public void notifyDuplicateUsername(String username) throws RemoteException {
+        logger.warning("Duplicate username detected: " + username);
+
+        // 停止心跳和加入请求
+        if (heartbeatTimer != null) {
+            heartbeatTimer.cancel();
+            heartbeatTimer = null;
+        }
+        if (joinRequestTimer != null) {
+            joinRequestTimer.cancel();
+            joinRequestTimer = null;
+        }
+
+        // 关闭等待对话框
+        if (joinWaitingDialog != null && joinWaitingDialog.isVisible()) {
+            SwingUtilities.invokeLater(() -> {
+                joinWaitingDialog.dispose();
+                joinWaitingDialog = null;
+            });
+        }
+
+        // 显示错误并退出
+        if (uiInitialized && frame != null) {
+            SwingUtilities.invokeLater(() -> {
+                JOptionPane.showMessageDialog(frame,
+                        "Username '" + username + "' is already connected to the whiteboard.\nConnection request rejected.",
+                        "Duplicate Username",
+                        JOptionPane.ERROR_MESSAGE);
+
+                // 2秒后退出，给用户时间看到消息
+                Timer exitTimer = new Timer();
+                exitTimer.schedule(new TimerTask() {
+                    @Override
+                    public void run() {
+                        System.exit(0);
+                    }
+                }, 2000);
+            });
+        } else {
+            // UI未初始化，直接退出
+            System.err.println("Username '" + username + "' is already connected. Exiting.");
+            System.exit(0);
+        }
     }
 }

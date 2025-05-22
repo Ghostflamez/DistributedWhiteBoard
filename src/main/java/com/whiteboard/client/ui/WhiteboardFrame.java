@@ -329,11 +329,12 @@ public class WhiteboardFrame extends JFrame {
     // 文件菜单功能（暂时只是占位方法）
     private void newWhiteboard() {
         if (client != null && client.isManager()) {
+            // 复用clear all的预警机制
             int response = JOptionPane.showConfirmDialog(this,
-                    "Create a new whiteboard? This will clear the current content.",
-                    "New Whiteboard",
+                    "Create a new whiteboard?\nThis will permanently delete all current drawings.",
+                    "New Whiteboard - Confirm",
                     JOptionPane.YES_NO_OPTION,
-                    JOptionPane.QUESTION_MESSAGE);
+                    JOptionPane.WARNING_MESSAGE);
 
             if (response == JOptionPane.YES_OPTION) {
                 try {
@@ -362,15 +363,32 @@ public class WhiteboardFrame extends JFrame {
 
     private void openWhiteboard() {
         if (client != null && client.isManager()) {
-            boolean success = client.loadWhiteboard(null); // null会弹出输入对话框
-            if (!success) {
-                // 错误信息已在client中显示
+            // 添加预警
+            int response = JOptionPane.showConfirmDialog(this,
+                    "Open a whiteboard file?\nThis will replace all current drawings with the loaded content.",
+                    "Open Whiteboard - Confirm",
+                    JOptionPane.YES_NO_OPTION,
+                    JOptionPane.WARNING_MESSAGE);
+
+            if (response == JOptionPane.YES_OPTION) {
+                boolean success = client.loadWhiteboard(null);
+                if (!success) {
+                    // 错误信息已在client中显示
+                }
             }
         } else {
-            JOptionPane.showMessageDialog(this,
-                    "Only the manager can load whiteboards.",
-                    "Permission Denied",
-                    JOptionPane.WARNING_MESSAGE);
+            // 修复：更准确的错误处理
+            if (client == null) {
+                JOptionPane.showMessageDialog(this,
+                        "No connection available.",
+                        "Connection Error",
+                        JOptionPane.ERROR_MESSAGE);
+            } else {
+                JOptionPane.showMessageDialog(this,
+                        "Only the manager can load whiteboards.",
+                        "Permission Denied",
+                        JOptionPane.WARNING_MESSAGE);
+            }
         }
     }
 

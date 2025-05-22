@@ -20,4 +20,10 @@ public interface IWhiteboardClient extends Remote {
     void notifyPendingJoinRequest(String username, boolean isOnline) throws RemoteException;
     void notifyServerDisconnected() throws RemoteException;
     void heartbeat() throws RemoteException; // 心跳检测
+
+    // 新增预览回调
+    void receivePreviewUpdate(Shape previewShape, String fromUser) throws RemoteException;
+    void receivePreviewClear(String fromUser) throws RemoteException;
+
+    void notifyDuplicateUsername(String username) throws RemoteException;
 }

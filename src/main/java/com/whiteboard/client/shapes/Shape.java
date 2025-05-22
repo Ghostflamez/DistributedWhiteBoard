@@ -15,6 +15,7 @@ public abstract class Shape implements Serializable {
     protected int strokeWidth;
     // for temporary use
     protected int tempAlpha = -1;
+    protected long timestamp;
 // constructor
     public Shape(Point startPoint, Point endPoint, Color color, int strokeWidth) {
         this.id = UUID.randomUUID().toString();
@@ -22,6 +23,8 @@ public abstract class Shape implements Serializable {
         this.endPoint = endPoint;
         this.color = color;
         this.strokeWidth = strokeWidth;
+        // Set the timestamp to the current time
+        this.timestamp = System.currentTimeMillis();
     }
 
     public abstract void draw(Graphics2D g);
@@ -35,7 +38,16 @@ public abstract class Shape implements Serializable {
     public void setEndPoint(Point endPoint) { this.endPoint = endPoint; }
     public int getStrokeWidth() { return strokeWidth; }
 
-    // 获取绘制颜色，考虑临时透明度
+    // 新增时间戳方法
+    public long getTimestamp() {
+        return timestamp;
+    }
+
+    public void setTimestamp(long timestamp) {
+        this.timestamp = timestamp;
+    }
+
+    // 其余方法保持不变
     protected Color getDrawColor() {
         if (tempAlpha >= 0) {
             return new Color(

@@ -39,6 +39,10 @@ public class WhiteboardServer implements IWhiteboardServer {
     private static final long LOCK_TIMEOUT_MS = 1000;
     private static final int REGION_SIZE = 50; // 像素
 
+    // 预览状态管理
+    private Map<String, Shape> activePreviewsMap = new ConcurrentHashMap<>(); // sessionId -> previewShape
+    private Map<String, Long> previewTimestamps = new ConcurrentHashMap<>(); // sessionId -> timestamp
+
     public WhiteboardServer() {
         whiteboardState = new WhiteboardState();
         userManager = new UserManager();
@@ -208,22 +212,22 @@ public class WhiteboardServer implements IWhiteboardServer {
     public void clearCanvas(String sessionId) throws RemoteException {
         logger.info("Clearing canvas, requested by session: " + sessionId);
 
-    // Check if user is manager
-    if (!userManager.isManager(sessionId)) {
-        logger.warning("Non-manager attempted to clear canvas: " + sessionId);
-        throw new RemoteException("Only manager can clear canvas");
-        // Return early - important!
+        // Check if user is manager
+        if (!userManager.isManager(sessionId)) {
+            logger.warning("Non-manager attempted to clear canvas: " + sessionId);
+            throw new RemoteException("Only manager can clear canvas");
+            // Return early - important!
+        }
+
+        // User is manager, proceed with clear operation
+        logger.info("Manager authorized to clear canvas, proceeding...");
+
+        // Clear whiteboard state
+        whiteboardState.clear();
+
+        // 广播清除命令，带断连检测
+        broadcastClearCanvas();
     }
-
-    // User is manager, proceed with clear operation
-    logger.info("Manager authorized to clear canvas, proceeding...");
-
-    // Clear whiteboard state
-    whiteboardState.clear();
-
-    // 广播清除命令，带断连检测
-    broadcastClearCanvas();
-}
 
     @Override
     public List<Shape> getAllShapes() throws RemoteException {
@@ -399,28 +403,28 @@ public class WhiteboardServer implements IWhiteboardServer {
         List<String> usernames = userManager.getConnectedUsernames();
         logger.info("Broadcasting user list: " + usernames);
 
-    // 创建副本避免并发修改异常
-    Map<String, IWhiteboardClient> clients = new HashMap<>(clientCallbacks);
-    List<String> disconnectedClients = new ArrayList<>();
+        // 创建副本避免并发修改异常
+        Map<String, IWhiteboardClient> clients = new HashMap<>(clientCallbacks);
+        List<String> disconnectedClients = new ArrayList<>();
 
-    for (Map.Entry<String, IWhiteboardClient> entry : clients.entrySet()) {
-        String sessionId = entry.getKey();
-        IWhiteboardClient client = entry.getValue();
+        for (Map.Entry<String, IWhiteboardClient> entry : clients.entrySet()) {
+            String sessionId = entry.getKey();
+            IWhiteboardClient client = entry.getValue();
 
-        try {
-            // 设置较短的超时时间来快速检测断连
-            client.updateUserList(usernames);
-        } catch (RemoteException e) {
-            logger.warning("Client disconnected during broadcast: " + sessionId + ", error: " + e.getMessage());
-            disconnectedClients.add(sessionId);
+            try {
+                // 设置较短的超时时间来快速检测断连
+                client.updateUserList(usernames);
+            } catch (RemoteException e) {
+                logger.warning("Client disconnected during broadcast: " + sessionId + ", error: " + e.getMessage());
+                disconnectedClients.add(sessionId);
+            }
+        }
+
+        // 清理断开连接的客户端
+        for (String sessionId : disconnectedClients) {
+            handleClientDisconnection(sessionId);
         }
     }
-
-    // 清理断开连接的客户端
-    for (String sessionId : disconnectedClients) {
-        handleClientDisconnection(sessionId);
-    }
-}
 
     private void notifyManagerLeft() {
         for (IWhiteboardClient client : clientCallbacks.values()) {
@@ -509,40 +513,67 @@ public class WhiteboardServer implements IWhiteboardServer {
         // 更新用户活动时间
         userManager.updateUserActivity(sessionId);
 
-        // 获取用户UID
-        String uid = userManager.getUidBySessionId(sessionId);
-        if (uid == null) {
-            logger.warning("Session not found: " + sessionId);
-            return;
+    // 获取用户UID
+    String uid = userManager.getUidBySessionId(sessionId);
+    if (uid == null) {
+        logger.warning("Session not found: " + sessionId);
+
+        // 通知客户端会话无效
+        IWhiteboardClient client = clientCallbacks.get(sessionId);
+        if (client != null) {
+            try {
+                client.notifyDuplicateUsername(username);
+            } catch (RemoteException e) {
+                logger.warning("Error notifying invalid session: " + e.getMessage());
+            }
+            clientCallbacks.remove(sessionId);
         }
+        return;
+    }
+
+    // 检查真正的重名用户（使用真实用户名，不是修改后的用户名）
+    User currentUser = userManager.getUserBySessionId(sessionId);
+    if (currentUser != null && !currentUser.getUsername().equals(username)) {
+        // 说明用户名被自动修改了，但是用户仍在使用原始用户名请求
+        logger.warning("Username mismatch detected: requested=" + username +
+                      ", actual=" + currentUser.getUsername());
+
+        IWhiteboardClient client = clientCallbacks.get(sessionId);
+        if (client != null) {
+            try {
+                client.notifyDuplicateUsername(username);
+            } catch (RemoteException e) {
+                logger.warning("Error notifying username mismatch: " + e.getMessage());
+            }
+        }
+
+        userManager.removeUser(sessionId);
+        clientCallbacks.remove(sessionId);
+        return;
+    }
 
         // 检查是否已批准
         if (userManager.isApproved(uid)) {
-            logger.info("User already approved: " + username);
-
-            // 已批准则直接通知用户
+            // 已批准用户，直接通知
             IWhiteboardClient client = clientCallbacks.get(sessionId);
             if (client != null) {
                 try {
                     client.notifyManagerDecision(true);
-                    logger.info("Re-notified approved user: " + username);
                 } catch (RemoteException e) {
                     logger.warning("Error notifying approved user: " + e.getMessage());
-                    clientCallbacks.remove(sessionId);
                 }
             }
             return;
         }
 
-        // 如果未批准且不在等待列表，则直接返回
+        // 正常处理加入请求
         if (!userManager.isPendingUser(sessionId)) {
             logger.warning("User not in pending list: " + sessionId);
             return;
         }
 
-        // 通知管理员有用户请求加入
-        notifyManagerAboutPendingUser(username);
-    }
+    notifyManagerAboutPendingUser(currentUser.getUsername()); // 使用真实用户名
+}
 
     /**
      * 通知管理员有新用户请求加入
@@ -795,5 +826,72 @@ public class WhiteboardServer implements IWhiteboardServer {
                 logger.warning("Error sending full reload to client: " + e.getMessage());
             }
         }
+    }
+
+    @Override
+    public void updatePreview(Shape previewShape, String sessionId) throws RemoteException {
+        if (!userManager.isConnectedUser(sessionId)) {
+            return;
+        }
+
+        // 记录预览和时间戳
+        activePreviewsMap.put(sessionId, previewShape);
+        previewTimestamps.put(sessionId, System.currentTimeMillis());
+
+        // 获取用户名
+        User user = userManager.getUserBySessionId(sessionId);
+        String username = user.getUsername();
+
+        // 广播预览给其他客户端（不包括发送者）
+        for (Map.Entry<String, IWhiteboardClient> entry : clientCallbacks.entrySet()) {
+            if (!entry.getKey().equals(sessionId)) { // 不发送给自己
+                try {
+                    entry.getValue().receivePreviewUpdate(previewShape, username);
+                } catch (RemoteException e) {
+                    logger.warning("Error sending preview update: " + e.getMessage());
+                }
+            }
+        }
+    }
+
+    @Override
+    public void clearPreview(String sessionId) throws RemoteException {
+        if (!userManager.isConnectedUser(sessionId)) {
+            return;
+        }
+
+        // 清除预览记录
+        activePreviewsMap.remove(sessionId);
+        previewTimestamps.remove(sessionId);
+
+        // 获取用户名
+        User user = userManager.getUserBySessionId(sessionId);
+        String username = user.getUsername();
+
+        // 广播清除预览给其他客户端
+        for (Map.Entry<String, IWhiteboardClient> entry : clientCallbacks.entrySet()) {
+            if (!entry.getKey().equals(sessionId)) {
+                try {
+                    entry.getValue().receivePreviewClear(username);
+                } catch (RemoteException e) {
+                    logger.warning("Error sending preview clear: " + e.getMessage());
+                }
+            }
+        }
+    }
+
+    /// 添加检查用户名是否已连接的方法
+    private boolean isUsernameAlreadyConnected(String username, String excludeSessionId) {
+        // 检查已连接用户
+        for (Map.Entry<String, IWhiteboardClient> entry : clientCallbacks.entrySet()) {
+            if (!entry.getKey().equals(excludeSessionId)) {
+                User user = userManager.getUserBySessionId(entry.getKey());
+                if (user != null && user.getUsername().equals(username) &&
+                        userManager.isConnectedUser(entry.getKey())) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 }
