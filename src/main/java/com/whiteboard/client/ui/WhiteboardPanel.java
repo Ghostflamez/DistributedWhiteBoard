@@ -38,6 +38,9 @@ public class WhiteboardPanel extends JPanel {
     private boolean isDrawing = false; // 标记是否正在绘制
     private boolean enablePreview = false; // 暂时禁用预览功能
 
+    // 临时形状显示 - 用于显示当前正在绘制但尚未提交的形状
+    private Shape currentDrawingShape = null;
+
     private static final Logger logger = Logger.getLogger(WhiteboardPanel.class.getName());
 
 
@@ -70,9 +73,12 @@ public class WhiteboardPanel extends JPanel {
                     showTextInputDialog(textTool);
                     repaint(); // 确保立即显示光标和预览
                 } else {
-                    // 其他工具处理
+                    // 所有其他工具（包括橡皮擦）的统一处理
                     currentTool.mousePressed(e.getPoint());
-                    isDrawing = true; // 开始绘制
+                    isDrawing = true;
+
+                    // 显示当前正在绘制的形状作为临时预览
+                    currentDrawingShape = currentTool.getCreatedShape();
                     repaint();
                 }
             }
@@ -86,14 +92,8 @@ public class WhiteboardPanel extends JPanel {
                     // 其他工具处理
                     currentTool.mouseDragged(e.getPoint());
 
-                    // 暂时禁用预览功能
-                    // if (enablePreview && isDrawing) {
-                    //     Shape previewShape = currentTool.getCreatedShape();
-                    //     if (previewShape != null) {
-                    //         sendPreviewUpdate(previewShape);
-                    //     }
-                    // }
-
+                    // 更新当前绘制形状的预览
+                    currentDrawingShape = currentTool.getCreatedShape();
                     repaint();
                 }
             }
@@ -114,19 +114,23 @@ public class WhiteboardPanel extends JPanel {
                     // 其他工具处理
                     currentTool.mouseReleased(e.getPoint());
 
-                    // 清除预览
-                    if (isDrawing) {
-                        if (enablePreview) {
-                            clearPreview();
-                        }
-                        isDrawing = false;
-                    }
+                    // 结束绘制
+                    isDrawing = false;
 
                     Shape shape = currentTool.getCreatedShape();
                     if (shape != null) {
-                        // 发送到服务器
+                        System.out.println("=== SHAPE COMPLETION DEBUG ===");
+                        System.out.println("Shape completed: " + shape.getClass().getSimpleName());
+                        System.out.println("Shape ID: " + shape.getId());
+                        System.out.println("Shape timestamp before send: " + shape.getTimestamp());
+
+                        // 关键修改：清除临时显示的形状，不添加到本地shapes列表
+                        currentDrawingShape = null;
+
+                        // 发送到服务器，等待服务器返回带正确时间戳的版本
                         if (drawingListener != null) {
                             drawingListener.accept(shape);
+                            System.out.println("Shape sent to server, waiting for server response");
                         }
 
                         // 重置橡皮擦工具
@@ -134,6 +138,8 @@ public class WhiteboardPanel extends JPanel {
                             EraserTool eraserTool = (EraserTool) currentTool;
                             eraserTool.resetErasureShape();
                         }
+
+                        System.out.println("=== END SHAPE COMPLETION DEBUG ===");
                     }
                     repaint();
                 }
@@ -443,7 +449,16 @@ public class WhiteboardPanel extends JPanel {
             g2d.setComposite(originalComposite);
         }
 
-        // 绘制当前正在创建的形状
+        // 绘制当前正在创建的形状（临时预览）
+        if (currentDrawingShape != null) {
+            // 使用半透明效果表示这是临时预览
+            Composite originalComposite = g2d.getComposite();
+            g2d.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.8f));
+            currentDrawingShape.draw(g2d);
+            g2d.setComposite(originalComposite);
+        }
+
+        // 绘制工具特定的UI元素
         if (currentTool != null) {
             if (currentTool instanceof TextTool) {
                 TextTool textTool = (TextTool) currentTool;
@@ -472,14 +487,6 @@ public class WhiteboardPanel extends JPanel {
             } else if (currentTool instanceof EraserTool) {
                 // 橡皮擦工具：绘制当前正在创建的擦除路径和位置指示器
                 EraserTool eraserTool = (EraserTool) currentTool;
-
-                // 绘制当前的擦除路径（如果正在绘制）
-                Shape currentErasure = eraserTool.getCreatedShape();
-                if (currentErasure != null && isDrawing) {
-                    currentErasure.draw(g2d);
-                }
-
-                // 绘制当前位置指示器（圆形光标）
                 Point p = eraserTool.getCurrentPoint();
                 if (p != null) {
                     int size = eraserTool.getEraserSize();
@@ -493,12 +500,6 @@ public class WhiteboardPanel extends JPanel {
                     g2d.setStroke(new BasicStroke(1));
                     g2d.drawOval(p.x - size/2, p.y - size/2, size, size);
                 }
-            } else {
-                // 其他工具：绘制当前正在创建的形状
-                Shape currentShape = currentTool.getCreatedShape();
-                if (currentShape != null) {
-                    currentShape.draw(g2d);
-                }
             }
         }
     }
@@ -506,6 +507,11 @@ public class WhiteboardPanel extends JPanel {
     // 设置当前工具
     public void setCurrentTool(DrawingTool tool) {
         logger.info("Switching tool to: " + (tool != null ? tool.getClass().getSimpleName() : "null"));
+
+        // 清除当前绘制的临时形状
+        currentDrawingShape = null;
+        isDrawing = false;
+
         this.currentTool = tool;
         repaint();
     }
@@ -596,6 +602,7 @@ public class WhiteboardPanel extends JPanel {
     public void clearCanvas() {
         logger.info("Clearing canvas in WhiteboardPanel");
         shapes.clear();
+        currentDrawingShape = null; // 也清除临时形状
 
         // 重置当前工具状态，取消任何正在进行的绘制操作
         if (currentTool != null) {
@@ -687,22 +694,32 @@ public class WhiteboardPanel extends JPanel {
 
     public void addShape(Shape shape) {
         if (shape != null) {
-            logger.info("Adding shape: " + shape.getClass().getSimpleName() + " ID: " + shape.getId());
+            System.out.println("=== CLIENT SHAPE RECEIVE DEBUG ===");
+            System.out.println("Client: Receiving shape " + shape.getClass().getSimpleName() +
+                    " ID: " + shape.getId() +
+                    " timestamp: " + shape.getTimestamp() +
+                    " thread: " + Thread.currentThread().getName());
 
         // 检查是否已存在相同ID的形状，防止重复添加
         boolean alreadyExists = shapes.stream()
                 .anyMatch(existingShape -> existingShape.getId().equals(shape.getId()));
 
             if (!alreadyExists) {
+                System.out.println("Client: Adding new shape, current shapes count: " + shapes.size());
+
                 shapes.add(shape);
 
             // 按时间戳排序 - 这是关键，确保所有客户端的显示顺序一致
             shapes.sort((s1, s2) -> Long.compare(s1.getTimestamp(), s2.getTimestamp()));
 
+                System.out.println("After sorting - Total shapes: " + shapes.size());
+
                 repaint();
             } else {
-                logger.warning("Duplicate shape ignored: " + shape.getId());
+                System.out.println("DUPLICATE: Shape with ID " + shape.getId().substring(0, 8) +
+                                 "... already exists, skipping");
             }
+            System.out.println("=== END CLIENT RECEIVE DEBUG ===");
         }
     }
 
