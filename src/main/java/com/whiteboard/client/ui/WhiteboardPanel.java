@@ -117,33 +117,33 @@ public class WhiteboardPanel extends JPanel {
 
             @Override
             public void mouseReleased(MouseEvent e) {
-                if (currentTool instanceof TextTool) {
-                    // 文本工具处理...
-                    TextTool textTool = (TextTool) currentTool;
-                    // 完成编辑后
-                    Shape textShape = textTool.getCreatedShape();
-                    if (textShape != null) {
-                        shapes.add(textShape);
+    if (currentTool instanceof TextTool) {
+        // 文本工具处理...
+        TextTool textTool = (TextTool) currentTool;
+        Shape textShape = textTool.getCreatedShape();
+        if (textShape != null) {
+            // 关键修改：不要立即添加到本地shapes列表
+            // shapes.add(textShape); // 注释掉这行
 
-                        // 通知服务器
-                        if (drawingListener != null) {
-                            drawingListener.accept(textShape);
-                        }
-                    }
-                } else if (currentTool instanceof EraserTool) {
-                    // 橡皮擦工具处理
-                    EraserTool eraserTool = (EraserTool) currentTool;
-                    eraserTool.mouseReleased(e.getPoint());
+            // 直接发送到服务器，等待服务器返回统一时间戳的版本
+            if (drawingListener != null) {
+                drawingListener.accept(textShape);
+            }
+        }
+    } else if (currentTool instanceof EraserTool) {
+        // 橡皮擦工具处理
+        EraserTool eraserTool = (EraserTool) currentTool;
+        eraserTool.mouseReleased(e.getPoint());
 
                     if (isDrawing) {
                         clearPreview();
                         isDrawing = false;
                     }
 
-                    // 获取擦除形状并发送到服务器
-                    Shape erasureShape = eraserTool.getCreatedShape();
-                    if (erasureShape != null) {
-                        shapes.add(erasureShape);
+        Shape erasureShape = eraserTool.getCreatedShape();
+        if (erasureShape != null) {
+            // 关键修改：不要立即添加到本地shapes列表
+            // shapes.add(erasureShape); // 注释掉这行
 
                         // 发送到服务器
                         if (drawingListener != null) {
@@ -165,9 +165,10 @@ public class WhiteboardPanel extends JPanel {
                         isDrawing = false;
                     }
 
-                    Shape shape = currentTool.getCreatedShape();
-                    if (shape != null) {
-                        shapes.add(shape);
+        Shape shape = currentTool.getCreatedShape();
+        if (shape != null) {
+            // 关键修改：不要立即添加到本地shapes列表
+            // shapes.add(shape); // 注释掉这行
 
                         // 如果有绘图监听器，通知形状变化
                         if (drawingListener != null) {
@@ -777,37 +778,39 @@ public class WhiteboardPanel extends JPanel {
 
     public void addShape(Shape shape) {
     if (shape != null) {
+        System.out.println("=== CLIENT SHAPE ADD DEBUG ===");
+        System.out.println("Client: Receiving shape " + shape.getClass().getSimpleName() +
+                " ID: " + shape.getId() +
+                " timestamp: " + shape.getTimestamp() +
+                " thread: " + Thread.currentThread().getName());
+
         // 检查是否已存在相同ID的形状，防止重复添加
         boolean alreadyExists = shapes.stream()
                 .anyMatch(existingShape -> existingShape.getId().equals(shape.getId()));
 
         if (!alreadyExists) {
-            System.out.println("=== CLIENT SHAPE ADD DEBUG ===");
-            System.out.println("Client: Adding shape " + shape.getClass().getSimpleName() +
-                    " ID: " + shape.getId() +
-                    " timestamp: " + shape.getTimestamp() +
-                    " thread: " + Thread.currentThread().getName());
+            System.out.println("Client: Adding new shape, current shapes count: " + shapes.size());
 
             shapes.add(shape);
 
-            // 排序前的状态
-            System.out.println("Before sorting - Total shapes: " + shapes.size());
-
-            // 按时间戳排序
+            // 按时间戳排序 - 这是关键，确保所有客户端的显示顺序一致
             shapes.sort((s1, s2) -> Long.compare(s1.getTimestamp(), s2.getTimestamp()));
 
-            System.out.println("After sorting - Shape order:");
-            for (int i = 0; i < shapes.size(); i++) {
+            System.out.println("After sorting - Total shapes: " + shapes.size());
+            System.out.println("Shape order after sorting:");
+            for (int i = 0; i < Math.min(shapes.size(), 5); i++) { // 只显示前5个
                 Shape s = shapes.get(i);
                 System.out.println("  " + i + ": " + s.getClass().getSimpleName() +
-                        " ID: " + s.getId() +
+                        " ID: " + s.getId().substring(0, 8) + "..." +
                         " timestamp: " + s.getTimestamp());
             }
 
             repaint();
         } else {
-            System.out.println("DUPLICATE: Shape with ID " + shape.getId() + " already exists, skipping");
+            System.out.println("DUPLICATE: Shape with ID " + shape.getId().substring(0, 8) +
+                             "... already exists, skipping");
         }
+        System.out.println("=== END CLIENT DEBUG ===");
     }
 }
 

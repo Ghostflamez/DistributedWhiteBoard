@@ -42,13 +42,49 @@ public class FreeDrawing extends Shape {
         System.out.println("=== FREEDRAWING DRAW DEBUG ===");
         System.out.println("Drawing FreeDrawing - isEraser: " + isEraser + ", color: " + color);
 
-        if (isEraser) {
-            System.out.println("Using eraser mode (Clear composite)");
-            // 擦除模式代码...
-        } else {
-            System.out.println("Using normal drawing mode with color: " + getDrawColor());
-            // 正常绘制代码...
+        if (points.size() < 2) {
+            System.out.println("Not enough points to draw");
+            return;
         }
+
+        // 保存原始设置
+        Composite originalComposite = g.getComposite();
+        Stroke originalStroke = g.getStroke();
+        Color originalColor = g.getColor();
+
+        try {
+            if (isEraser) {
+                System.out.println("Using eraser mode (Clear composite)");
+                // 擦除模式：使用 AlphaComposite.CLEAR 来实现真正的擦除效果
+                g.setComposite(AlphaComposite.getInstance(AlphaComposite.CLEAR));
+                g.setStroke(new BasicStroke(strokeWidth, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+
+                // 绘制擦除路径
+                for (int i = 0; i < points.size() - 1; i++) {
+                    Point p1 = points.get(i);
+                    Point p2 = points.get(i + 1);
+                    g.drawLine(p1.x, p1.y, p2.x, p2.y);
+                }
+            } else {
+                System.out.println("Using normal drawing mode with color: " + getDrawColor());
+                // 正常绘制模式
+                g.setColor(getDrawColor());
+                g.setStroke(new BasicStroke(strokeWidth, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+
+                // 绘制正常路径
+                for (int i = 0; i < points.size() - 1; i++) {
+                    Point p1 = points.get(i);
+                    Point p2 = points.get(i + 1);
+                    g.drawLine(p1.x, p1.y, p2.x, p2.y);
+                }
+            }
+        } finally {
+            // 恢复原始设置
+            g.setStroke(originalStroke);
+            g.setColor(originalColor);
+            g.setComposite(originalComposite);
+        }
+
         System.out.println("=== END FREEDRAWING DRAW DEBUG ===");
     }
 

@@ -174,24 +174,29 @@ public class WhiteboardServer implements IWhiteboardServer {
     // 绘图操作方法实现
     @Override
     public void addShape(Shape shape, String sessionId) throws RemoteException {
-        System.out.println("=== SERVER SHAPE ADD DEBUG ===");
-        System.out.println("Server: Received shape " + shape.getClass().getSimpleName() +
-                " ID: " + shape.getId() +
-                " timestamp: " + shape.getTimestamp() +
-                " from session: " + sessionId);
+    System.out.println("=== SERVER SHAPE ADD DEBUG ===");
+    System.out.println("Server: Received shape " + shape.getClass().getSimpleName() +
+            " ID: " + shape.getId() +
+            " original timestamp: " + shape.getTimestamp() +
+            " from session: " + sessionId);
 
-        // 检查用户权限
-        if (userManager.isConnectedUser(sessionId)) {
-            // 添加形状到白板状态
-            whiteboardState.addShape(shape);
+    // 检查用户权限
+    if (userManager.isConnectedUser(sessionId)) {
+        // 关键修改：服务器统一分配时间戳
+        shape.setTimestamp(System.currentTimeMillis());
 
-            System.out.println("Server: Broadcasting shape to " + clientCallbacks.size() + " clients");
+        System.out.println("Server: Assigned new timestamp: " + shape.getTimestamp());
 
-            // 广播形状给所有客户端
-            broadcastShapeUpdate(shape);
-        }
-        System.out.println("=== END SERVER DEBUG ===");
+        // 添加形状到白板状态
+        whiteboardState.addShape(shape);
+
+        System.out.println("Server: Broadcasting shape to " + clientCallbacks.size() + " clients");
+
+        // 广播形状给所有客户端（包括发送者，以保证时间戳一致）
+        broadcastShapeUpdateToAll(shape);
     }
+    System.out.println("=== END SERVER DEBUG ===");
+}
 
     @Override
     public void removeShape(String shapeId, String sessionId) throws RemoteException {
@@ -900,5 +905,28 @@ public class WhiteboardServer implements IWhiteboardServer {
             }
         }
         return false;
+    }
+
+    private void broadcastShapeUpdateToAll(Shape shape) {
+        Map<String, IWhiteboardClient> clients = new HashMap<>(clientCallbacks);
+        List<String> disconnectedClients = new ArrayList<>();
+
+        for (Map.Entry<String, IWhiteboardClient> entry : clients.entrySet()) {
+            String sessionId = entry.getKey();
+            IWhiteboardClient client = entry.getValue();
+
+            try {
+                client.updateShape(shape);
+                logger.fine("Successfully broadcasted shape to client: " + sessionId);
+            } catch (RemoteException e) {
+                logger.warning("Client disconnected during shape broadcast: " + sessionId);
+                disconnectedClients.add(sessionId);
+            }
+        }
+
+        // 清理断开连接的客户端
+        for (String sessionId : disconnectedClients) {
+            handleClientDisconnection(sessionId);
+        }
     }
 }
