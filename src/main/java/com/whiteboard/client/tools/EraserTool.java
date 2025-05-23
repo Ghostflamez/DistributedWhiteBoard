@@ -12,7 +12,7 @@ import com.whiteboard.client.shapes.FreeDrawing;
 
 public class EraserTool implements DrawingTool {
     private FreeDrawing currentErasure;
-    private final Color backgroundColor; // 设为final，防止意外修改
+    private final Color eraserColor; // 橡皮擦颜色（白色）
     private int eraserSize;
     private Point currentPoint;
     private List<Point> erasePath = new ArrayList<>();
@@ -23,27 +23,23 @@ public class EraserTool implements DrawingTool {
 
     public EraserTool(int eraserSize, Color backgroundColor) {
         this.eraserSize = eraserSize;
-        // 确保背景色不会被意外修改
-        this.backgroundColor = new Color(backgroundColor.getRGB());
+        // 橡皮擦始终使用白色，忽略传入的背景色
+        this.eraserColor = Color.WHITE;
+
+        System.out.println("EraserTool created with size: " + eraserSize + ", using WHITE color");
     }
 
     @Override
     public void mousePressed(Point p) {
-        System.out.println("=== ERASER MOUSE PRESSED DEBUG ===");
-        System.out.println("Creating FreeDrawing with background color: " + backgroundColor);
+        System.out.println("EraserTool mousePressed at: " + p);
 
-        // 强制使用背景色
-        currentErasure = new FreeDrawing(p, backgroundColor, eraserSize);
-        // 标记这是一个擦除对象
-        currentErasure.setIsEraser(true);
+        // 创建白色的自由绘制对象
+        currentErasure = new FreeDrawing(p, eraserColor, eraserSize);
 
-        System.out.println("FreeDrawing created with color: " + currentErasure.getColor());
-        System.out.println("FreeDrawing isEraser: " + currentErasure.isEraser());
-
-        erasePath.clear();
-        erasePath.add(p);
+        // 不需要设置擦除标志，就当普通的白色笔刷使用
         currentPoint = p;
-        System.out.println("=== END ERASER DEBUG ===");
+
+        System.out.println("Created FreeDrawing with color: " + currentErasure.getColor());
     }
 
     @Override
@@ -58,9 +54,10 @@ public class EraserTool implements DrawingTool {
     public void mouseReleased(Point p) {
         if (currentErasure != null) {
             currentErasure.addPoint(p);
-            erasePath.add(p);
             currentPoint = p;
         }
+
+        System.out.println("EraserTool mouseReleased, shape ready for sending");
     }
 
     @Override
@@ -69,42 +66,43 @@ public class EraserTool implements DrawingTool {
     }
 
     public void resetErasureShape() {
+        System.out.println("Resetting eraser shape");
         currentErasure = null;
     }
 
     // 添加带插值的点，解决快速移动时的路径不连续问题
     private void addPointWithInterpolation(Point newPoint) {
-        if (erasePath.isEmpty()) {
-            erasePath.add(newPoint);
+        if (currentErasure == null) return;
+
+        List<Point> existingPoints = currentErasure.getPoints();
+        if (existingPoints.isEmpty()) {
             currentErasure.addPoint(newPoint);
             return;
         }
 
-    // Get the last point
-    Point lastPoint = erasePath.get(erasePath.size() - 1);
+        // 获取最后一个点
+        Point lastPoint = existingPoints.get(existingPoints.size() - 1);
 
-    // Calculate distance
-    double distance = lastPoint.distance(newPoint);
+        // 计算距离
+        double distance = lastPoint.distance(newPoint);
 
-    // If distance is too large, interpolate points between
-    if (distance > 8) { // Lower threshold to 8 pixels for smoother curves
-        int steps = (int)(distance / 4) + 1; // More points (every 4 pixels)
+        // 如果距离太大，插入中间点
+        if (distance > 5) { // 降低阈值到5像素以获得更平滑的曲线
+            int steps = (int)(distance / 3) + 1; // 每3像素一个点
 
-        for (int i = 1; i < steps; i++) {
-            double ratio = (double)i / steps;
-            int x = (int)(lastPoint.x + (newPoint.x - lastPoint.x) * ratio);
-            int y = (int)(lastPoint.y + (newPoint.y - lastPoint.y) * ratio);
+            for (int i = 1; i < steps; i++) {
+                double ratio = (double)i / steps;
+                int x = (int)(lastPoint.x + (newPoint.x - lastPoint.x) * ratio);
+                int y = (int)(lastPoint.y + (newPoint.y - lastPoint.y) * ratio);
 
-            Point interpolatedPoint = new Point(x, y);
-            erasePath.add(interpolatedPoint);
-            currentErasure.addPoint(interpolatedPoint);
+                Point interpolatedPoint = new Point(x, y);
+                currentErasure.addPoint(interpolatedPoint);
+            }
         }
-    }
 
-    // Add the new point
-    erasePath.add(newPoint);
-    currentErasure.addPoint(newPoint);
-}
+        // 添加新点
+        currentErasure.addPoint(newPoint);
+    }
 
     // 简化后的getter方法
     public Point getCurrentPoint() {
@@ -115,22 +113,14 @@ public class EraserTool implements DrawingTool {
         return eraserSize;
     }
 
-    public List<Point> getErasePath() {
-        return erasePath;
-    }
-
-    // 颜色保护：不允许外部修改橡皮擦的颜色
     public Color getBackgroundColor() {
-        return new Color(backgroundColor.getRGB()); // 返回副本，防止修改
+        return eraserColor; // 始终返回白色
     }
 
     public void setEraserSize(int eraserSize) {
         this.eraserSize = eraserSize;
     }
 
-    public void clearPath() {
-        erasePath.clear();
-    }
     public void setCurrentPoint(Point p) {
         this.currentPoint = p;
     }

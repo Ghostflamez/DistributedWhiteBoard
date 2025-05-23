@@ -9,12 +9,13 @@ public class FreeDrawing extends Shape {
     private static final long serialVersionUID = 1L;
 
     private List<Point> points;
-    private boolean isEraser = false; // 新增：标记是否为擦除模式
 
     public FreeDrawing(Point start, Color color, int strokeWidth) {
         super(start, start, color, strokeWidth);
         points = new ArrayList<>();
         points.add(start);
+
+        System.out.println("FreeDrawing created with color: " + color + " (RGB: " + color.getRGB() + ")");
     }
 
     public void addPoint(Point p) {
@@ -22,70 +23,38 @@ public class FreeDrawing extends Shape {
         endPoint = p;
     }
 
-    // 新增：设置擦除模式
-    public void setIsEraser(boolean isEraser) {
-        System.out.println("=== FREEDRAWING ERASER FLAG DEBUG ===");
-        System.out.println("Setting isEraser to: " + isEraser);
-        System.out.println("Shape color: " + this.color);
-        System.out.println("Thread: " + Thread.currentThread().getName());
-        this.isEraser = isEraser;
-        System.out.println("=== END FREEDRAWING DEBUG ===");
-    }
-
-    // 新增：获取擦除模式状态
-    public boolean isEraser() {
-        return isEraser;
-    }
-
     @Override
     public void draw(Graphics2D g) {
-        System.out.println("=== FREEDRAWING DRAW DEBUG ===");
-        System.out.println("Drawing FreeDrawing - isEraser: " + isEraser + ", color: " + color);
-
         if (points.size() < 2) {
-            System.out.println("Not enough points to draw");
+            // 如果只有一个点，绘制一个小圆点
+            if (points.size() == 1) {
+                Point p = points.get(0);
+                g.setColor(getDrawColor());
+                g.fillOval(p.x - strokeWidth/2, p.y - strokeWidth/2, strokeWidth, strokeWidth);
+            }
             return;
         }
 
         // 保存原始设置
-        Composite originalComposite = g.getComposite();
         Stroke originalStroke = g.getStroke();
         Color originalColor = g.getColor();
 
         try {
-            if (isEraser) {
-                System.out.println("Using eraser mode (Clear composite)");
-                // 擦除模式：使用 AlphaComposite.CLEAR 来实现真正的擦除效果
-                g.setComposite(AlphaComposite.getInstance(AlphaComposite.CLEAR));
-                g.setStroke(new BasicStroke(strokeWidth, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            // 设置绘制属性
+            g.setColor(getDrawColor());
+            g.setStroke(new BasicStroke(strokeWidth, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
 
-                // 绘制擦除路径
-                for (int i = 0; i < points.size() - 1; i++) {
-                    Point p1 = points.get(i);
-                    Point p2 = points.get(i + 1);
-                    g.drawLine(p1.x, p1.y, p2.x, p2.y);
-                }
-            } else {
-                System.out.println("Using normal drawing mode with color: " + getDrawColor());
-                // 正常绘制模式
-                g.setColor(getDrawColor());
-                g.setStroke(new BasicStroke(strokeWidth, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-
-                // 绘制正常路径
-                for (int i = 0; i < points.size() - 1; i++) {
-                    Point p1 = points.get(i);
-                    Point p2 = points.get(i + 1);
-                    g.drawLine(p1.x, p1.y, p2.x, p2.y);
-                }
+            // 绘制路径
+            for (int i = 0; i < points.size() - 1; i++) {
+                Point p1 = points.get(i);
+                Point p2 = points.get(i + 1);
+                g.drawLine(p1.x, p1.y, p2.x, p2.y);
             }
         } finally {
             // 恢复原始设置
             g.setStroke(originalStroke);
             g.setColor(originalColor);
-            g.setComposite(originalComposite);
         }
-
-        System.out.println("=== END FREEDRAWING DRAW DEBUG ===");
     }
 
     @Override

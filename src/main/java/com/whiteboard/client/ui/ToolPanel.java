@@ -66,8 +66,16 @@ public class ToolPanel extends JToolBar {
                         new Font("Arial", Font.PLAIN, getCurrentFontSize()))));
         add(textButton);
 
-        // 橡皮擦按钮
-        setupEraserButton();
+        // 橡皮擦按钮 - 简化版本
+        JButton eraserButton = new JButton("Eraser");
+        eraserButton.addActionListener(e -> {
+            // 创建橡皮擦工具，大小为当前笔刷大小的2倍（最小8像素）
+            int eraserSize = Math.max(getCurrentStrokeWidth() * 2, 8);
+            EraserTool eraserTool = new EraserTool(eraserSize, Color.WHITE);
+            whiteboardPanel.setCurrentTool(eraserTool);
+            logger.info("Eraser tool activated with size: " + eraserSize);
+        });
+        add(eraserButton);
 
         // 清除按钮
         JButton clearButton = new JButton("Clear All");
@@ -78,10 +86,17 @@ clearButton.addActionListener(e -> {
         WhiteboardFrame frame = (WhiteboardFrame) window;
         WhiteboardClient client = frame.getClient();
 
-        if (client != null && client.isManager()) {
-            // 管理员：先清除本地画布，然后发送清除命令到服务器
-            try {
-                logger.info("Manager clearing canvas locally and sending to server");
+                if (client != null && client.isManager()) {
+                    // 管理员：显示确认对话框
+                    int response = JOptionPane.showConfirmDialog(whiteboardPanel,
+                            "Clear all drawings?\nThis action cannot be undone.",
+                            "Clear Canvas - Confirm",
+                            JOptionPane.YES_NO_OPTION,
+                            JOptionPane.WARNING_MESSAGE);
+
+                    if (response == JOptionPane.YES_OPTION) {
+                        try {
+                            logger.info("Manager clearing canvas locally and sending to server");
 
                 // 先清除本地画布
                 whiteboardPanel.clearCanvas();
@@ -94,31 +109,47 @@ clearButton.addActionListener(e -> {
                 logger.severe("Error sending clear canvas command: " + ex.getMessage());
                 ex.printStackTrace();
 
-                // 如果发送到服务器失败，显示错误消息
-                JOptionPane.showMessageDialog(whiteboardPanel,
-                        "Error sending clear command to server: " + ex.getMessage(),
-                        "Network Error",
-                        JOptionPane.ERROR_MESSAGE);
+                            // 如果发送到服务器失败，显示错误消息
+                            JOptionPane.showMessageDialog(whiteboardPanel,
+                                    "Error sending clear command to server: " + ex.getMessage(),
+                                    "Network Error",
+                                    JOptionPane.ERROR_MESSAGE);
+                        }
+                    }
+                } else if (client != null && !client.isManager()) {
+                    // 非管理员：只显示权限错误
+                    logger.warning("Non-manager attempted to clear canvas");
+                    JOptionPane.showMessageDialog(whiteboardPanel,
+                            "Only the manager can clear the canvas.",
+                            "Permission Denied",
+                            JOptionPane.WARNING_MESSAGE);
+                } else {
+                    // 本地模式：直接清除本地画布
+                    int response = JOptionPane.showConfirmDialog(whiteboardPanel,
+                            "Clear all drawings?\nThis action cannot be undone.",
+                            "Clear Canvas - Confirm",
+                            JOptionPane.YES_NO_OPTION,
+                            JOptionPane.WARNING_MESSAGE);
+
+                    if (response == JOptionPane.YES_OPTION) {
+                        logger.info("Local mode: clearing canvas locally");
+                        whiteboardPanel.clearCanvas();
+                    }
+                }
+            } else {
+                // 如果无法获取客户端引用，默认为本地模式
+                int response = JOptionPane.showConfirmDialog(whiteboardPanel,
+                        "Clear all drawings?\nThis action cannot be undone.",
+                        "Clear Canvas - Confirm",
+                        JOptionPane.YES_NO_OPTION,
+                        JOptionPane.WARNING_MESSAGE);
+
+                if (response == JOptionPane.YES_OPTION) {
+                    logger.info("Unable to get client reference, clearing locally");
+                    whiteboardPanel.clearCanvas();
+                }
             }
-        } else if (client != null && !client.isManager()) {
-            // 非管理员：只显示权限错误，不清除本地画布
-            logger.warning("Non-manager attempted to clear canvas");
-            JOptionPane.showMessageDialog(whiteboardPanel,
-                    "Only the manager can clear the canvas.",
-                    "Permission Denied",
-                    JOptionPane.WARNING_MESSAGE);
-            // 注意：这里没有调用 whiteboardPanel.clearCanvas()
-        } else {
-            // 本地模式：直接清除本地画布
-            logger.info("Local mode: clearing canvas locally");
-            whiteboardPanel.clearCanvas();
-        }
-    } else {
-        // 如果无法获取客户端引用，默认为本地模式
-        logger.info("Unable to get client reference, clearing locally");
-        whiteboardPanel.clearCanvas();
-    }
-});
+        });
         add(clearButton);
 
         // 添加分隔符
@@ -271,9 +302,9 @@ clearButton.addActionListener(e -> {
             } else if (currentTool instanceof EraserTool) {
                 // 更新橡皮擦大小，保持当前模式
                 EraserTool oldEraserTool = (EraserTool) currentTool;
-                EraserTool newEraserTool = new EraserTool(Math.toIntExact(Math.round(width * 1.25)),
-                        whiteboardPanel.getBackground());
-                whiteboardPanel.setCurrentTool(newEraserTool);
+                int eraserSize = Math.max(width * 2, 8); // 橡皮擦大小为笔刷的2倍，最小8像素
+                EraserTool newEraserTool = new EraserTool(eraserSize, Color.WHITE);
+
                 // 如果当前点存在，保留它
                 if (oldEraserTool.getCurrentPoint() != null) {
                     newEraserTool.setCurrentPoint(oldEraserTool.getCurrentPoint());
@@ -285,31 +316,6 @@ clearButton.addActionListener(e -> {
         // 更新预览
         strokePreviewPanel.repaint();
     }
-
-    // 在ToolPanel类中添加橡皮擦控制
-    private void setupEraserButton() {
-        JButton eraserButton = new JButton("Eraser");
-
-        // 直接使用笔刷模式橡皮擦，无需模式选择
-        eraserButton.addActionListener(new ActionListener() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                // 直接创建笔刷模式橡皮擦
-                createEraserWithCurrentSettings();
-            }
-        });
-
-        add(eraserButton);
-    }
-
-    // 辅助方法：使用当前笔刷大小创建橡皮擦
-    private void createEraserWithCurrentSettings() {
-        int currentSize = getCurrentStrokeWidth();
-        int eraserSize = (int) Math.round(currentSize * 1.25); // 橡皮擦尺寸为笔刷大小的1.25倍
-        EraserTool eraserTool = new EraserTool(eraserSize, whiteboardPanel.getBackground());
-        whiteboardPanel.setCurrentTool(eraserTool);
-    }
-
 
     public int getCurrentStrokeWidth() {
         return strokeWidthSlider.getValue();
