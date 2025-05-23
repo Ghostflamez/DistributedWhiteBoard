@@ -40,8 +40,11 @@ public class WhiteboardServer implements IWhiteboardServer {
     private static final int REGION_SIZE = 50; // 像素
 
     // 预览状态管理
+    // 新增预览信息管理
+    private Map<String, PreviewInfo> activePreviewsWithTimestamp = new ConcurrentHashMap<>();
     private Map<String, Shape> activePreviewsMap = new ConcurrentHashMap<>(); // sessionId -> previewShape
     private Map<String, Long> previewTimestamps = new ConcurrentHashMap<>(); // sessionId -> timestamp
+
 
     public WhiteboardServer() {
         whiteboardState = new WhiteboardState();
@@ -846,30 +849,93 @@ public class WhiteboardServer implements IWhiteboardServer {
         }
     }
 
+
+
+    private static class PreviewInfo {
+        final Shape shape;
+        final long startTimestamp;
+        final String sessionId;
+
+        PreviewInfo(Shape shape, long startTimestamp, String sessionId) {
+            this.shape = shape;
+            this.startTimestamp = startTimestamp;
+            this.sessionId = sessionId;
+        }
+    }
+
+    // 新增：开始预览
+    @Override
+    public long startPreview(Shape initialShape, String sessionId) throws RemoteException {
+        if (!userManager.isConnectedUser(sessionId)) {
+            throw new RemoteException("User not connected");
+        }
+
+        // 服务器分配预览开始时间戳
+        long previewTimestamp = System.currentTimeMillis();
+        initialShape.setTimestamp(previewTimestamp);
+
+        // 存储预览信息
+        PreviewInfo previewInfo = new PreviewInfo(initialShape, previewTimestamp, sessionId);
+        activePreviewsWithTimestamp.put(sessionId, previewInfo);
+
+        // 获取用户名
+        User user = userManager.getUserBySessionId(sessionId);
+        String username = user.getUsername();
+
+        // 广播预览开始给其他客户端
+        broadcastPreviewStart(initialShape, username, previewTimestamp, sessionId);
+
+        logger.info("Preview started for user: " + username + ", timestamp: " + previewTimestamp);
+        return previewTimestamp;
+    }
+
     @Override
     public void updatePreview(Shape previewShape, String sessionId) throws RemoteException {
         if (!userManager.isConnectedUser(sessionId)) {
             return;
         }
 
-        // 记录预览和时间戳
-        activePreviewsMap.put(sessionId, previewShape);
-        previewTimestamps.put(sessionId, System.currentTimeMillis());
+        PreviewInfo existingPreview = activePreviewsWithTimestamp.get(sessionId);
+        if (existingPreview != null) {
+            // 保持原有的开始时间戳
+            previewShape.setTimestamp(existingPreview.startTimestamp);
 
-        // 获取用户名
+            // 更新预览信息
+            PreviewInfo updatedPreview = new PreviewInfo(previewShape,
+                existingPreview.startTimestamp, sessionId);
+            activePreviewsWithTimestamp.put(sessionId, updatedPreview);
+
+            // 获取用户名并广播更新
+            User user = userManager.getUserBySessionId(sessionId);
+            String username = user.getUsername();
+            broadcastPreviewUpdate(previewShape, username, sessionId);
+        }
+    }
+
+    @Override
+    public void completeShape(Shape finalShape, String sessionId) throws RemoteException {
+        if (!userManager.isConnectedUser(sessionId)) {
+            return;
+        }
+
+        // 1. 清除预览
+        activePreviewsWithTimestamp.remove(sessionId);
         User user = userManager.getUserBySessionId(sessionId);
         String username = user.getUsername();
+        broadcastPreviewClear(username, sessionId);
 
-        // 广播预览给其他客户端（不包括发送者）
-        for (Map.Entry<String, IWhiteboardClient> entry : clientCallbacks.entrySet()) {
-            if (!entry.getKey().equals(sessionId)) { // 不发送给自己
-                try {
-                    entry.getValue().receivePreviewUpdate(previewShape, username);
-                } catch (RemoteException e) {
-                    logger.warning("Error sending preview update: " + e.getMessage());
-                }
-            }
-        }
+        // 2. 分配正式形状时间戳（基于完成时间）
+        long finalTimestamp = System.currentTimeMillis();
+        finalShape.setTimestamp(finalTimestamp);
+
+        // 3. 添加到正式形状层
+        whiteboardState.addShape(finalShape);
+
+        // 4. 广播正式形状
+        broadcastShapeUpdateToAll(finalShape);
+
+        logger.info("Shape completed for user: " + username +
+                ", final timestamp: " + finalTimestamp);
     }
 
     @Override
@@ -879,23 +945,12 @@ public class WhiteboardServer implements IWhiteboardServer {
         }
 
         // 清除预览记录
-        activePreviewsMap.remove(sessionId);
-        previewTimestamps.remove(sessionId);
+        activePreviewsWithTimestamp.remove(sessionId);
 
-        // 获取用户名
+        // 获取用户名并广播清除
         User user = userManager.getUserBySessionId(sessionId);
         String username = user.getUsername();
-
-        // 广播清除预览给其他客户端
-        for (Map.Entry<String, IWhiteboardClient> entry : clientCallbacks.entrySet()) {
-            if (!entry.getKey().equals(sessionId)) {
-                try {
-                    entry.getValue().receivePreviewClear(username);
-                } catch (RemoteException e) {
-                    logger.warning("Error sending preview clear: " + e.getMessage());
-                }
-            }
-        }
+        broadcastPreviewClear(username, sessionId);
     }
 
     /// 添加检查用户名是否已连接的方法
@@ -935,4 +990,57 @@ public class WhiteboardServer implements IWhiteboardServer {
             handleClientDisconnection(sessionId);
         }
     }
+
+    // 广播预览开始
+    private void broadcastPreviewStart(Shape shape, String username, long timestamp, String excludeSessionId) {
+        List<String> disconnectedClients = new ArrayList<>();
+
+        for (Map.Entry<String, IWhiteboardClient> entry : clientCallbacks.entrySet()) {
+            if (!entry.getKey().equals(excludeSessionId)) {
+                try {
+                    entry.getValue().receivePreviewStart(shape, username, timestamp);
+                } catch (RemoteException e) {
+                    logger.warning("Error sending preview start: " + e.getMessage());
+                    disconnectedClients.add(entry.getKey());
+                }
+            }
+        }
+
+        // 清理断开连接的客户端
+        for (String sessionId : disconnectedClients) {
+            handleClientDisconnection(sessionId);
+        }
+    }
+
+    private void broadcastPreviewUpdate(Shape shape, String username, String excludeSessionId) {
+        List<String> disconnectedClients = new ArrayList<>();
+
+        for (Map.Entry<String, IWhiteboardClient> entry : clientCallbacks.entrySet()) {
+            if (!entry.getKey().equals(excludeSessionId)) {
+                try {
+                    entry.getValue().receivePreviewUpdate(shape, username);
+                } catch (RemoteException e) {
+                    logger.warning("Error sending preview update: " + e.getMessage());
+                    disconnectedClients.add(entry.getKey());
+                }
+            }
+        }
+
+        for (String sessionId : disconnectedClients) {
+            handleClientDisconnection(sessionId);
+        }
+    }
+
+    private void broadcastPreviewClear(String username, String excludeSessionId) {
+        for (Map.Entry<String, IWhiteboardClient> entry : clientCallbacks.entrySet()) {
+            if (!entry.getKey().equals(excludeSessionId)) {
+                try {
+                    entry.getValue().receivePreviewClear(username);
+                } catch (RemoteException e) {
+                    logger.warning("Error sending preview clear: " + e.getMessage());
+                }
+            }
+        }
+    }
+
 }

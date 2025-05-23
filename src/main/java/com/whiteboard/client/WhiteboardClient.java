@@ -57,6 +57,8 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
     // 预览相关
     private Timer previewTimer;
     private Shape currentPreviewShape;
+    // 新增：当前预览的服务器时间戳
+    private long currentPreviewTimestamp = -1;
 
     private static class ChatMessage {
         final String sender;
@@ -1071,6 +1073,16 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
 
 
     // preview相关方法
+
+    // 实现新的预览开始回调
+    @Override
+    public void receivePreviewStart(Shape previewShape, String fromUser, long timestamp) throws RemoteException {
+        if (uiInitialized && frame != null) {
+            SwingUtilities.invokeLater(() -> {
+                frame.getWhiteboardPanel().addPreview(fromUser, previewShape, timestamp);
+            });
+        }
+    }
     @Override
     public void receivePreviewUpdate(Shape previewShape, String fromUser) throws RemoteException {
         if (uiInitialized && frame != null) {
@@ -1154,6 +1166,57 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
             // UI未初始化，直接退出
             System.err.println("Username '" + username + "' is already connected. Exiting.");
             System.exit(0);
+        }
+    }
+
+    // 新增：开始本地预览
+    public void startLocalPreview(Shape initialShape) {
+        if (isConnected && (isManager || isApproved)) {
+            try {
+                // 向服务器请求预览时间戳
+                currentPreviewTimestamp = server.startPreview(initialShape, sessionId);
+                logger.info("Started preview with timestamp: " + currentPreviewTimestamp);
+            } catch (RemoteException e) {
+                logger.warning("Error starting preview: " + e.getMessage());
+                currentPreviewTimestamp = -1;
+            }
+        }
+    }
+
+    // 修改：更新预览
+    public void updateLocalPreview(Shape shape) {
+        if (isConnected && (isManager || isApproved) && currentPreviewTimestamp != -1) {
+            try {
+                // 保持预览时间戳
+                shape.setTimestamp(currentPreviewTimestamp);
+                server.updatePreview(shape, sessionId);
+            } catch (RemoteException e) {
+                logger.warning("Error updating preview: " + e.getMessage());
+            }
+        }
+    }
+
+    // 新增：完成形状
+    public void completeLocalShape(Shape finalShape) {
+        if (isConnected && (isManager || isApproved)) {
+            try {
+                server.completeShape(finalShape, sessionId);
+                currentPreviewTimestamp = -1; // 重置预览时间戳
+                logger.info("Completed shape");
+            } catch (RemoteException e) {
+                logger.warning("Error completing shape: " + e.getMessage());
+            }
+        }
+    }
+
+    public void clearLocalPreview() {
+        if (isConnected && (isManager || isApproved)) {
+            try {
+                server.clearPreview(sessionId);
+                currentPreviewTimestamp = -1;
+            } catch (RemoteException e) {
+                logger.warning("Error clearing preview: " + e.getMessage());
+            }
         }
     }
 }

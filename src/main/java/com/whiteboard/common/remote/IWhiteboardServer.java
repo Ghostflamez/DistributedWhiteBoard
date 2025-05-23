@@ -33,4 +33,11 @@ public interface IWhiteboardServer extends Remote {
     // 新增预览方法
     void updatePreview(Shape previewShape, String sessionId) throws RemoteException;
     void clearPreview(String sessionId) throws RemoteException;
+
+    long startPreview(Shape initialShape, String sessionId) throws RemoteException;
+    void completeShape(Shape finalShape, String sessionId) throws RemoteException;
+
+// updatePreview 和 clearPreview 方法保持不变
+
+
 }

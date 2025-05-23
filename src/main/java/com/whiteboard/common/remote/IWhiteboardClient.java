@@ -24,6 +24,10 @@ public interface IWhiteboardClient extends Remote {
     // 新增预览回调
     void receivePreviewUpdate(Shape previewShape, String fromUser) throws RemoteException;
     void receivePreviewClear(String fromUser) throws RemoteException;
+    // 添加预览开始回调
+    void receivePreviewStart(Shape previewShape, String fromUser, long timestamp) throws RemoteException;
 
     void notifyDuplicateUsername(String username) throws RemoteException;
+
+
 }
