@@ -73,7 +73,7 @@ public class WhiteboardPanel extends JPanel {
                     EraserTool eraserTool = (EraserTool) currentTool;
                     eraserTool.mousePressed(e.getPoint());
                     isDrawing = true; // 开始绘制
-                    processEraser(eraserTool);
+                    repaint();
                 } else {
                     // 其他工具处理
                     currentTool.mousePressed(e.getPoint());
@@ -98,7 +98,7 @@ public class WhiteboardPanel extends JPanel {
                             sendPreviewUpdate(previewShape);
                         }
                     }
-                    processEraser(eraserTool);
+                    repaint();
                 } else {
                     // 其他工具处理
                     currentTool.mouseDragged(e.getPoint());
@@ -245,50 +245,50 @@ public class WhiteboardPanel extends JPanel {
 
     // ================== 橡皮擦处理方法 ==================
 
-    private void processEraser(EraserTool eraserTool) {
-        if (eraserTool.getCurrentPoint() == null) return;
-
-        Point p = eraserTool.getCurrentPoint();
-        int size = eraserTool.getEraserSize();
-
-        if (eraserTool.getMode() == EraserTool.EraseMode.OBJECT) {
-            // 对象擦除模式
-            //processObjectEraser(eraserTool, p, size);
-        } else {
-            // 自由擦除模式
-            processFreeEraser(eraserTool);
-        }
-
-        repaint();
-    }
+//    private void processEraser(EraserTool eraserTool) {
+//        if (eraserTool.getCurrentPoint() == null) return;
+//
+//        Point p = eraserTool.getCurrentPoint();
+//        int size = eraserTool.getEraserSize();
+//
+//        if (eraserTool.getMode() == EraserTool.EraseMode.OBJECT) {
+//            // 对象擦除模式
+//            //processObjectEraser(eraserTool, p, size);
+//        } else {
+//            // 自由擦除模式
+//            processFreeEraser(eraserTool);
+//        }
+//
+//        repaint();
+//    }
 
     // 修改WhiteboardPanel中的processFreeEraser方法
-    private void processFreeEraser(EraserTool eraserTool) {
-        List<Point> path = eraserTool.getErasePath();
-        if (path.size() < 2) return;
-
-        int size = eraserTool.getEraserSize();
-
-        // 鼠标释放时，创建一个擦除形状
-        if (!path.isEmpty() &&
-                eraserTool.getCurrentPoint().equals(path.get(path.size() - 1))) {
-
-            // 创建一个使用背景色的擦除形状
-            ErasureShape erasureShape = new ErasureShape(
-                    new ArrayList<>(path), // 复制当前路径
-                    size,
-                    getBackground() // 使用画布背景色
-            );
-
-            // 添加到形状列表
-            shapes.add(erasureShape);
-
-            // 清除路径以便下次擦除
-            eraserTool.clearPath();
-        }
-
-        repaint();
-    }
+//    private void processFreeEraser(EraserTool eraserTool) {
+//        List<Point> path = eraserTool.getErasePath();
+//        if (path.size() < 2) return;
+//
+//        int size = eraserTool.getEraserSize();
+//
+//        // 鼠标释放时，创建一个擦除形状
+//        if (!path.isEmpty() &&
+//                eraserTool.getCurrentPoint().equals(path.get(path.size() - 1))) {
+//
+//            // 创建一个使用背景色的擦除形状
+//            ErasureShape erasureShape = new ErasureShape(
+//                    new ArrayList<>(path), // 复制当前路径
+//                    size,
+//                    getBackground() // 使用画布背景色
+//            );
+//
+//            // 添加到形状列表
+//            shapes.add(erasureShape);
+//
+//            // 清除路径以便下次擦除
+//            eraserTool.clearPath();
+//        }
+//
+//        repaint();
+//    }
 
     // ================== 文本输入对话框 ==================
 
@@ -525,59 +525,95 @@ public class WhiteboardPanel extends JPanel {
                         }
                     }
                 }
-            } else if (!(currentTool instanceof EraserTool)) {
+            } else if (currentTool instanceof EraserTool) {
+                // 橡皮擦工具：绘制当前正在创建的擦除路径和位置指示器
+                EraserTool eraserTool = (EraserTool) currentTool;
+
+                // 绘制当前的擦除路径（如果正在绘制）
+                Shape currentErasure = eraserTool.getCreatedShape();
+                if (currentErasure != null && isDrawing) {
+                    // 绘制正在进行的擦除路径（使用半透明效果以示预览）
+                    g2d.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.7f));
+                    currentErasure.draw(g2d);
+                    g2d.setComposite(originalComposite);
+                }
+
+                // 绘制当前位置指示器（圆形光标）
+                Point p = eraserTool.getCurrentPoint();
+                if (p != null) {
+                    int size = eraserTool.getEraserSize();
+
+                    // 绘制半透明的圆形指示器
+                    g2d.setColor(new Color(200, 200, 200, 150));
+                    g2d.fillOval(p.x - size/2, p.y - size/2, size, size);
+
+                    // 绘制圆形边框
+                    g2d.setColor(Color.DARK_GRAY);
+                    g2d.setStroke(new BasicStroke(1));
+                    g2d.drawOval(p.x - size/2, p.y - size/2, size, size);
+                }
+            } else {
+                // 其他工具：绘制当前正在创建的形状
                 Shape currentShape = currentTool.getCreatedShape();
                 if (currentShape != null) {
                     currentShape.draw(g2d);
                 }
             }
         }
-
-        if (currentTool instanceof EraserTool) {
-            EraserTool eraserTool = (EraserTool) currentTool;
-            Point p = eraserTool.getCurrentPoint();
-            if (p != null) {
-                int size = eraserTool.getEraserSize();
-
-                // 绘制轨迹（对象模式显示轨迹，自由模式不显示）
-                if (eraserTool.getMode() == EraserTool.EraseMode.OBJECT) {
-                    List<Point> path = eraserTool.getErasePath();
-                    if (path.size() > 1) {
-                        g2d.setColor(new Color(200, 200, 200, 100)); // 半透明灰色
-                        g2d.setStroke(new BasicStroke(size, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-
-                        for (int i = 0; i < path.size() - 1; i++) {
-                            Point p1 = path.get(i);
-                            Point p2 = path.get(i + 1);
-                            g2d.drawLine(p1.x, p1.y, p2.x, p2.y);
-                        }
-                    }
-                }
-
-                // 绘制当前位置指示器（圆形）
-                g2d.setColor(new Color(200, 200, 200, 150));
-                g2d.fillOval(p.x - size/2, p.y - size/2, size, size);
-                g2d.setColor(Color.DARK_GRAY);
-                g2d.drawOval(p.x - size/2, p.y - size/2, size, size);
-
-            }
-        }
     }
 
     // 设置当前工具
     public void setCurrentTool(DrawingTool tool) {
-        this.currentTool = tool;
+        System.out.println("=== TOOL CHANGE DEBUG ===");
+        System.out.println("Old tool: " + (currentTool != null ? currentTool.getClass().getSimpleName() : "null"));
+        System.out.println("New tool: " + (tool != null ? tool.getClass().getSimpleName() : "null"));
+
+        // 如果切换到橡皮擦，确保使用背景色
+        if (tool instanceof EraserTool) {
+            EraserTool eraserTool = (EraserTool) tool;
+            System.out.println("Switching to eraser - input eraser color: " + eraserTool.getBackgroundColor());
+            System.out.println("Panel background: " + getBackground());
+
+            // 重新创建橡皮擦确保使用正确的背景色
+            EraserTool protectedEraser = new EraserTool(eraserTool.getEraserSize(), getBackground());
+            if (eraserTool.getCurrentPoint() != null) {
+                protectedEraser.setCurrentPoint(eraserTool.getCurrentPoint());
+            }
+            System.out.println("Created protected eraser with color: " + protectedEraser.getBackgroundColor());
+            this.currentTool = protectedEraser;
+        } else {
+            this.currentTool = tool;
+        }
+        System.out.println("=== END TOOL DEBUG ===");
     }
 
     // 设置当前颜色
     public void setCurrentColor(Color color) {
+        System.out.println("=== COLOR CHANGE DEBUG ===");
+        System.out.println("Setting color to: " + color + " (RGB: " + color.getRGB() + ")");
+        System.out.println("Current tool: " + (currentTool != null ? currentTool.getClass().getSimpleName() : "null"));
+
+        if (currentTool instanceof EraserTool) {
+            EraserTool eraser = (EraserTool) currentTool;
+            System.out.println("Current eraser background color: " + eraser.getBackgroundColor());
+            System.out.println("Panel background color: " + getBackground());
+        }
+
         this.currentColor = color;
-        updateToolColor();
+
+        // 只有在当前工具不是橡皮擦时才更新工具颜色
+        if (!(currentTool instanceof EraserTool)) {
+            System.out.println("Updating tool color (not eraser)");
+            updateToolColor();
+        } else {
+            System.out.println("Skipping color update for eraser");
+        }
 
         // 通知ToolPanel更新预览
         if (toolPanel != null) {
             toolPanel.updatePreview();
         }
+        System.out.println("=== END COLOR DEBUG ===");
     }
 
     // 设置当前线宽
@@ -596,6 +632,11 @@ public class WhiteboardPanel extends JPanel {
 
     // 更新工具颜色
     private void updateToolColor() {
+    // 橡皮擦不参与颜色更新，直接返回
+        if (currentTool instanceof EraserTool) {
+            return;
+        }
+
         if (currentTool instanceof LineTool) {
             currentTool = new LineTool(currentColor, currentStrokeWidth);
         } else if (currentTool instanceof RectangleTool) {
@@ -609,27 +650,37 @@ public class WhiteboardPanel extends JPanel {
         } else if (currentTool instanceof TextTool) {
             currentTool = new TextTool(currentColor, currentFont);
         }
-        // EraserTool不受颜色影响
     }
 
     // 更新工具线宽
     private void updateToolStrokeWidth() {
-        if (currentTool instanceof LineTool) {
-            currentTool = new LineTool(currentColor, currentStrokeWidth);
-        } else if (currentTool instanceof RectangleTool) {
-            currentTool = new RectangleTool(currentColor, currentStrokeWidth);
-        } else if (currentTool instanceof OvalTool) {
-            currentTool = new OvalTool(currentColor, currentStrokeWidth);
-        } else if (currentTool instanceof TriangleTool) {
-            currentTool = new TriangleTool(currentColor, currentStrokeWidth);
-        } else if (currentTool instanceof PencilTool) {
-            currentTool = new PencilTool(currentColor, currentStrokeWidth);
-        } else if (currentTool instanceof EraserTool) {
-            currentTool = new EraserTool(Math.toIntExact(Math.round(currentStrokeWidth * 1.25)),
-                    getBackground());
+    if (currentTool instanceof LineTool) {
+        currentTool = new LineTool(currentColor, currentStrokeWidth);
+    } else if (currentTool instanceof RectangleTool) {
+        currentTool = new RectangleTool(currentColor, currentStrokeWidth);
+    } else if (currentTool instanceof OvalTool) {
+        currentTool = new OvalTool(currentColor, currentStrokeWidth);
+    } else if (currentTool instanceof TriangleTool) {
+        currentTool = new TriangleTool(currentColor, currentStrokeWidth);
+    } else if (currentTool instanceof PencilTool) {
+        currentTool = new PencilTool(currentColor, currentStrokeWidth);
+    } else if (currentTool instanceof EraserTool) {
+        // 橡皮擦只更新大小，严格保持背景色
+        EraserTool oldEraser = (EraserTool) currentTool;
+        int newSize = Math.toIntExact(Math.round(currentStrokeWidth * 1.25));
+
+        // 关键修复：始终使用背景色，不管当前选择什么颜色
+        EraserTool newEraser = new EraserTool(newSize, getBackground());
+
+        // 保持当前位置
+        if (oldEraser.getCurrentPoint() != null) {
+            newEraser.setCurrentPoint(oldEraser.getCurrentPoint());
         }
-        // TextTool不受线宽影响
+
+        currentTool = newEraser;
     }
+    // TextTool不受线宽影响
+}
 
     // 清除画布
     public void clearCanvas() {
@@ -725,24 +776,41 @@ public class WhiteboardPanel extends JPanel {
     }
 
     public void addShape(Shape shape) {
-        if (shape != null) {
-            System.out.println("DEBUG: Adding shape " + shape.getClass().getSimpleName() +
-                    " with timestamp " + shape.getTimestamp());
+    if (shape != null) {
+        // 检查是否已存在相同ID的形状，防止重复添加
+        boolean alreadyExists = shapes.stream()
+                .anyMatch(existingShape -> existingShape.getId().equals(shape.getId()));
+
+        if (!alreadyExists) {
+            System.out.println("=== CLIENT SHAPE ADD DEBUG ===");
+            System.out.println("Client: Adding shape " + shape.getClass().getSimpleName() +
+                    " ID: " + shape.getId() +
+                    " timestamp: " + shape.getTimestamp() +
+                    " thread: " + Thread.currentThread().getName());
+
             shapes.add(shape);
+
+            // 排序前的状态
+            System.out.println("Before sorting - Total shapes: " + shapes.size());
 
             // 按时间戳排序
             shapes.sort((s1, s2) -> Long.compare(s1.getTimestamp(), s2.getTimestamp()));
 
-            System.out.println("DEBUG: After sorting, shapes order:");
+            System.out.println("After sorting - Shape order:");
             for (int i = 0; i < shapes.size(); i++) {
                 Shape s = shapes.get(i);
                 System.out.println("  " + i + ": " + s.getClass().getSimpleName() +
-                        " (timestamp: " + s.getTimestamp() + ")");
+                        " ID: " + s.getId() +
+                        " timestamp: " + s.getTimestamp());
             }
 
             repaint();
+        } else {
+            System.out.println("DUPLICATE: Shape with ID " + shape.getId() + " already exists, skipping");
         }
     }
+}
+
 
     public void removeShape(String shapeId) {
         shapes.removeIf(shape -> shape.getId().equals(shapeId));

@@ -273,13 +273,13 @@ clearButton.addActionListener(e -> {
                 EraserTool oldEraserTool = (EraserTool) currentTool;
                 EraserTool newEraserTool = new EraserTool(Math.toIntExact(Math.round(width * 1.25)),
                         whiteboardPanel.getBackground());
-                // 设置橡皮擦模式
-                newEraserTool.setMode(oldEraserTool.getMode());
                 whiteboardPanel.setCurrentTool(newEraserTool);
                 // 如果当前点存在，保留它
                 if (oldEraserTool.getCurrentPoint() != null) {
                     newEraserTool.setCurrentPoint(oldEraserTool.getCurrentPoint());
                 }
+
+                whiteboardPanel.setCurrentTool(newEraserTool);
             }
         }
         // 更新预览
@@ -290,76 +290,12 @@ clearButton.addActionListener(e -> {
     private void setupEraserButton() {
         JButton eraserButton = new JButton("Eraser");
 
-        // 创建橡皮擦选项面板
-        JPopupMenu eraserMenu = new JPopupMenu();
-        JPanel eraserPanel = new JPanel(new BorderLayout(5, 5));
-        eraserPanel.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
-
-        // 橡皮擦模式单选按钮
-        JPanel modePanel = new JPanel(new GridLayout(2, 1, 0, 5));
-        modePanel.setBorder(BorderFactory.createTitledBorder("Eraser Mode"));
-
-        ButtonGroup modeGroup = new ButtonGroup();
-        JRadioButton objectModeButton = new JRadioButton(EraserTool.EraseMode.OBJECT.getDisplayName());
-        JRadioButton freeModeButton = new JRadioButton(EraserTool.EraseMode.FREE.getDisplayName());
-
-        // 禁用对象擦除模式按钮
-        objectModeButton.setEnabled(false);
-
-        freeModeButton.setSelected(true); // 默认选中自由擦除模式
-
-        modeGroup.add(objectModeButton);
-        modeGroup.add(freeModeButton);
-
-        modePanel.add(objectModeButton);
-        modePanel.add(freeModeButton);
-
-        // 应用按钮
-        JButton applyButton = new JButton("Apply");
-
-        // 事件监听
-        applyButton.addActionListener(new ActionListener() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                // 创建橡皮擦并设置模式
-                createEraserWithCurrentSettings(
-                        objectModeButton.isSelected() ?
-                                EraserTool.EraseMode.OBJECT : EraserTool.EraseMode.FREE);
-
-                // 关闭菜单
-                eraserMenu.setVisible(false);
-            }
-        });
-
-        // 组装面板
-        eraserPanel.add(modePanel, BorderLayout.CENTER);
-        eraserPanel.add(applyButton, BorderLayout.SOUTH);
-
-        eraserMenu.add(eraserPanel);
-
-        // 左键点击 - 快速使用默认模式橡皮擦
+        // 直接使用笔刷模式橡皮擦，无需模式选择
         eraserButton.addActionListener(new ActionListener() {
             @Override
             public void actionPerformed(ActionEvent e) {
-                // 使用对象擦除模式
-                createEraserWithCurrentSettings(EraserTool.EraseMode.FREE);
-            }
-        });
-
-        // 右键点击 - 显示模式选择菜单
-        eraserButton.addMouseListener(new MouseAdapter() {
-            @Override
-            public void mousePressed(MouseEvent e) {
-                if (e.isPopupTrigger() || e.getButton() == MouseEvent.BUTTON3) {
-                    eraserMenu.show(eraserButton, e.getX(), e.getY());
-                }
-            }
-
-            @Override
-            public void mouseReleased(MouseEvent e) {
-                if (e.isPopupTrigger() || e.getButton() == MouseEvent.BUTTON3) {
-                    eraserMenu.show(eraserButton, e.getX(), e.getY());
-                }
+                // 直接创建笔刷模式橡皮擦
+                createEraserWithCurrentSettings();
             }
         });
 
@@ -367,11 +303,10 @@ clearButton.addActionListener(e -> {
     }
 
     // 辅助方法：使用当前笔刷大小创建橡皮擦
-    private void createEraserWithCurrentSettings(EraserTool.EraseMode mode) {
+    private void createEraserWithCurrentSettings() {
         int currentSize = getCurrentStrokeWidth();
         int eraserSize = (int) Math.round(currentSize * 1.25); // 橡皮擦尺寸为笔刷大小的1.25倍
         EraserTool eraserTool = new EraserTool(eraserSize, whiteboardPanel.getBackground());
-        eraserTool.setMode(mode);
         whiteboardPanel.setCurrentTool(eraserTool);
     }
 

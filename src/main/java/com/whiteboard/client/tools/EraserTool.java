@@ -11,26 +11,10 @@ import com.whiteboard.client.shapes.ErasureShape;
 import com.whiteboard.client.shapes.FreeDrawing;
 
 public class EraserTool implements DrawingTool {
-    // 擦除模式枚举
-    public enum EraseMode {
-        OBJECT("Object Eraser"),
-        FREE("Freehand Eraser");
-        private final String displayName;
-
-        EraseMode(String displayName) {
-            this.displayName = displayName;
-        }
-
-        public String getDisplayName() {
-            return displayName;
-        }
-    }
-
     private FreeDrawing currentErasure;
-    private Color backgroundColor;
+    private final Color backgroundColor; // 设为final，防止意外修改
     private int eraserSize;
     private Point currentPoint;
-    private EraseMode mode = EraseMode.FREE; // 默认为自由擦除模式
     private List<Point> erasePath = new ArrayList<>();
     private List<Shape> shapesToRemove = new ArrayList<>();
     private List<Shape> shapesToPreview = new ArrayList<>();
@@ -39,17 +23,27 @@ public class EraserTool implements DrawingTool {
 
     public EraserTool(int eraserSize, Color backgroundColor) {
         this.eraserSize = eraserSize;
-        this.backgroundColor = backgroundColor;
+        // 确保背景色不会被意外修改
+        this.backgroundColor = new Color(backgroundColor.getRGB());
     }
 
     @Override
     public void mousePressed(Point p) {
-        // 使用背景色创建FreeDrawing对象
+        System.out.println("=== ERASER MOUSE PRESSED DEBUG ===");
+        System.out.println("Creating FreeDrawing with background color: " + backgroundColor);
+
+        // 强制使用背景色
         currentErasure = new FreeDrawing(p, backgroundColor, eraserSize);
+        // 标记这是一个擦除对象
+        currentErasure.setIsEraser(true);
+
+        System.out.println("FreeDrawing created with color: " + currentErasure.getColor());
+        System.out.println("FreeDrawing isEraser: " + currentErasure.isEraser());
+
         erasePath.clear();
         erasePath.add(p);
         currentPoint = p;
-        released = false;
+        System.out.println("=== END ERASER DEBUG ===");
     }
 
     @Override
@@ -57,7 +51,6 @@ public class EraserTool implements DrawingTool {
         if (currentErasure != null) {
             addPointWithInterpolation(p);
             currentPoint = p;
-            released = false;
         }
     }
 
@@ -67,28 +60,12 @@ public class EraserTool implements DrawingTool {
             currentErasure.addPoint(p);
             erasePath.add(p);
             currentPoint = p;
-            released = true;
-
-            // 创建最终的ErasureShape对象
-            if (!erasePath.isEmpty()) {
-                finalErasureShape = new ErasureShape(
-                        new ArrayList<>(erasePath),
-                        eraserSize,
-                        backgroundColor
-                );
-            }
         }
     }
 
     @Override
     public Shape getCreatedShape() {
-        // ✅ 修改逻辑：只有在真正释放后才返回ErasureShape
-        if (released && finalErasureShape != null) {
-            return finalErasureShape;  // 最终对象
-        } else if (currentErasure != null) {
-            return currentErasure;     // 预览对象（FreeDrawing）
-        }
-        return null;
+        return currentErasure;
     }
 
     public void resetErasureShape() {
@@ -97,11 +74,11 @@ public class EraserTool implements DrawingTool {
 
     // 添加带插值的点，解决快速移动时的路径不连续问题
     private void addPointWithInterpolation(Point newPoint) {
-    if (erasePath.isEmpty()) {
-        erasePath.add(newPoint);
-        currentErasure.addPoint(newPoint);
-        return;
-    }
+        if (erasePath.isEmpty()) {
+            erasePath.add(newPoint);
+            currentErasure.addPoint(newPoint);
+            return;
+        }
 
     // Get the last point
     Point lastPoint = erasePath.get(erasePath.size() - 1);
@@ -129,13 +106,7 @@ public class EraserTool implements DrawingTool {
     currentErasure.addPoint(newPoint);
 }
 
-
-
-    // Getters and setters
-    public void setMode(EraseMode mode) {
-        this.mode = mode;
-    }
-
+    // 简化后的getter方法
     public Point getCurrentPoint() {
         return currentPoint;
     }
@@ -144,40 +115,13 @@ public class EraserTool implements DrawingTool {
         return eraserSize;
     }
 
-    public List<Shape> getShapesToRemove() {
-        return shapesToRemove;
-    }
-
-    public void clearShapesToRemove() {
-        shapesToRemove.clear();
-    }
-
-    public void addShapeToRemove(Shape shape) {
-        if (!shapesToRemove.contains(shape)) {
-            shapesToRemove.add(shape);
-        }
-    }
-
-    public List<Shape> getShapesToPreview() {
-        return shapesToPreview;
-    }
-
-    public void addShapeToPreview(Shape shape) {
-        if (!shapesToPreview.contains(shape)) {
-            shapesToPreview.add(shape);
-        }
-    }
-
-    public void clearShapesToPreview() {
-        shapesToPreview.clear();
-    }
-
     public List<Point> getErasePath() {
         return erasePath;
     }
 
-    public EraseMode getMode() {
-        return mode;
+    // 颜色保护：不允许外部修改橡皮擦的颜色
+    public Color getBackgroundColor() {
+        return new Color(backgroundColor.getRGB()); // 返回副本，防止修改
     }
 
     public void setEraserSize(int eraserSize) {
@@ -189,9 +133,5 @@ public class EraserTool implements DrawingTool {
     }
     public void setCurrentPoint(Point p) {
         this.currentPoint = p;
-    }
-
-    public boolean isReleased() {
-        return released;
     }
 }

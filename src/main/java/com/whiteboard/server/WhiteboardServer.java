@@ -174,16 +174,23 @@ public class WhiteboardServer implements IWhiteboardServer {
     // 绘图操作方法实现
     @Override
     public void addShape(Shape shape, String sessionId) throws RemoteException {
-        logger.info("Adding shape from session: " + sessionId);
+        System.out.println("=== SERVER SHAPE ADD DEBUG ===");
+        System.out.println("Server: Received shape " + shape.getClass().getSimpleName() +
+                " ID: " + shape.getId() +
+                " timestamp: " + shape.getTimestamp() +
+                " from session: " + sessionId);
 
         // 检查用户权限
         if (userManager.isConnectedUser(sessionId)) {
             // 添加形状到白板状态
             whiteboardState.addShape(shape);
 
-            // 广播形状给所有客户端，带断连检测
+            System.out.println("Server: Broadcasting shape to " + clientCallbacks.size() + " clients");
+
+            // 广播形状给所有客户端
             broadcastShapeUpdate(shape);
         }
+        System.out.println("=== END SERVER DEBUG ===");
     }
 
     @Override

@@ -3,7 +3,7 @@ package com.whiteboard.client.shapes;
 import java.awt.*;
 import java.util.ArrayList;
 import java.util.List;
-
+@Deprecated
 public class ErasureShape extends Shape {
     private List<Point> path;
     private int eraserSize;
