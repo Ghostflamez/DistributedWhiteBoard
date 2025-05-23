@@ -35,6 +35,7 @@ public class EraserTool implements DrawingTool {
     private List<Shape> shapesToRemove = new ArrayList<>();
     private List<Shape> shapesToPreview = new ArrayList<>();
     private boolean released = false;
+    private ErasureShape finalErasureShape = null;
 
     public EraserTool(int eraserSize, Color backgroundColor) {
         this.eraserSize = eraserSize;
@@ -56,6 +57,7 @@ public class EraserTool implements DrawingTool {
         if (currentErasure != null) {
             addPointWithInterpolation(p);
             currentPoint = p;
+            released = false;
         }
     }
 
@@ -66,12 +68,27 @@ public class EraserTool implements DrawingTool {
             erasePath.add(p);
             currentPoint = p;
             released = true;
+
+            // 创建最终的ErasureShape对象
+            if (!erasePath.isEmpty()) {
+                finalErasureShape = new ErasureShape(
+                        new ArrayList<>(erasePath),
+                        eraserSize,
+                        backgroundColor
+                );
+            }
         }
     }
 
     @Override
     public Shape getCreatedShape() {
-        return currentErasure;
+        // ✅ 修改逻辑：只有在真正释放后才返回ErasureShape
+        if (released && finalErasureShape != null) {
+            return finalErasureShape;  // 最终对象
+        } else if (currentErasure != null) {
+            return currentErasure;     // 预览对象（FreeDrawing）
+        }
+        return null;
     }
 
     public void resetErasureShape() {
