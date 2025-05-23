@@ -64,7 +64,13 @@ public class WhiteboardServer implements IWhiteboardServer {
         // 如果请求作为管理员但已有管理员
         if (requestAsManager && userManager.getManagerId() != null) {
             logger.warning("Second manager attempted to connect: " + username);
-            return null; // 拒绝连接
+            return null; // 保持原逻辑
+        }
+
+        // 新增：检查用户名冲突
+        if (userManager.isUsernameExists(username)) {
+            logger.info("Username conflict detected: " + username);
+            return "ERROR:Username '" + username + "' is already in use. Please try a different username.";
         }
 
         return userManager.connectUser(username, requestAsManager);

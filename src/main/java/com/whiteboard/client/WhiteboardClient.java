@@ -114,12 +114,34 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
             // 查找服务器
             server = (IWhiteboardServer) registry.lookup("WhiteboardServer");
 
+        // 连接用户
+        String result = server.connectUser(username, requestAsManager);
 
-            // 连接用户
-            sessionId = server.connectUser(username, requestAsManager);
+        // 新增：检查是否为错误信息
+        if (result != null && result.startsWith("ERROR:")) {
+            String errorMessage = result.substring(6); // 去掉 "ERROR:" 前缀
 
-        // 如果返回null，表示连接被拒绝
-        if (sessionId == null) {
+            // 显示错误对话框
+            SwingUtilities.invokeLater(() -> {
+                JOptionPane.showMessageDialog(null,
+                    errorMessage,
+                    "Username Conflict",
+                    JOptionPane.WARNING_MESSAGE);
+            });
+
+            // 2秒后退出，给用户时间看到消息
+            Timer exitTimer = new Timer();
+            exitTimer.schedule(new TimerTask() {
+                @Override
+                public void run() {
+                    System.exit(0);
+                }
+            }, 5000);
+            return; // 重要：不继续后续流程
+        }
+
+        // 如果返回null，表示连接被拒绝（原有逻辑）
+        if (result == null) {
             String errorMsg = requestAsManager ?
                 "Connection rejected: Another manager is already connected." :
                 "Connection rejected by server.";
@@ -128,12 +150,11 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
             throw new RuntimeException(errorMsg);
         }
 
-            // 确定管理员状态
-            isManager = server.isManager(sessionId);
-            isConnected = true;
-
-            // 启动心跳
-            startHeartbeat();
+        // 原有逻辑：正常连接
+        this.sessionId = result;
+        isManager = server.isManager(sessionId);
+        isConnected = true;
+        startHeartbeat();
 
         // 如果不是管理员，显示等待对话框并启动加入请求
         if (!isManager) {
@@ -143,8 +164,8 @@ public class WhiteboardClient extends UnicastRemoteObject implements IWhiteboard
             isApproved = true; // 管理员自动批准
         }
 
-        logger.info("Connected to server as " + (isManager ? "manager" : "regular user") +
-                ", isApproved=" + isApproved);
+        logger.info("Connected to server as " + (isManager ? "manager" : "regular user"));
+
     } catch (RemoteException | NotBoundException e) {
         logger.severe("Could not connect to server: " + e.getMessage());
         isConnected = false;
